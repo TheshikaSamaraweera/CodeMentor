@@ -85,17 +85,21 @@ class IssueComparator:
         }
 
 
-def compare_issues(ai_issues: Dict[str, Any], static_issues: List[Dict]) -> List[Dict]:
+def compare_issues(quality_issues: Dict[str, Any], security_issues: Dict[str, Any], static_issues: List[Dict]) -> List[Dict]:
     """Enhanced issue comparison with better merging logic."""
     print("🧮 Running Enhanced Error Comparator...")
 
     comparator = IssueComparator()
     merged = []
-    ai_issue_list = ai_issues.get("issues", [])
+    quality_issue_list = quality_issues.get("issues", [])
+    security_issue_list = security_issues.get("issues", [])
 
     # Convert AI issues to standard format
     processed_ai_issues = []
-    for issue in ai_issue_list:
+
+    # Convert Quality issues to standard format
+    processed_quality_issues = []
+    for issue in quality_issue_list:
         processed_issue = {
             "line": issue.get("line", 0),
             "description": issue.get("issue", issue.get("description", "")),
@@ -105,11 +109,60 @@ def compare_issues(ai_issues: Dict[str, Any], static_issues: List[Dict]) -> List
             "confidence": issue.get("confidence", 0.8),
             "category": _categorize_issue(issue.get("issue", ""))
         }
-        processed_ai_issues.append(processed_issue)
+        processed_quality_issues.append(processed_issue)
+
+    # Convert Security issues to standard format
+    processed_security_issues = []
+    for issue in security_issue_list:
+        processed_issue = {
+            "line": issue.get("line", 0),
+            "description": issue.get("issue", ""),
+            "suggestion": issue.get("suggestion", ""),
+            "source": "AI",
+            "severity": issue.get("severity", "medium"),
+            "confidence": issue.get("confidence", 0.8),
+            "category": _categorize_issue(issue.get("issue", ""))
+        }
+        processed_security_issues.append(processed_issue)
+
+    # Combine AI issues from both quality and security analyses
+    processed_ai_issues = processed_quality_issues + processed_security_issues
 
     # Convert static issues to standard format
     processed_static_issues = []
     for issue in static_issues:
+        processed_issue = {
+            "line": issue.get("line", 0),
+            "description": issue.get("issue", ""),
+            "suggestion": issue.get("suggestion", ""),
+            "source": "Static",
+            "severity": issue.get("severity", "medium"),
+            "confidence": issue.get("confidence", 0.8),
+            "category": _categorize_issue(issue.get("issue", ""))
+        }
+        processed_static_issues.append(processed_issue)
+
+    # Find matches between AI and static issues
+    matched_static_indices = set()
+
+    for ai_issue in processed_ai_issues:
+        best_match = None
+        best_match_idx = -1
+
+        for idx, static_issue in enumerate(processed_static_issues):
+            if idx in matched_static_indices:
+                continue
+
+            if comparator.are_issues_similar(ai_issue, static_issue):
+                best_match = static_issue
+                best_match_idx = idx
+                break
+
+        if best_match:
+            # Merge the issues
+            merged_issue = comparator.merge_similar_issues(ai_issue, best_match)
+            merged.append(merged_issue)
+            matched_static_indices.add(best_match_idx)
         processed_issue = {
             "line": issue.get("line", 0),
             "description": issue.get("issue", ""),
@@ -152,7 +205,7 @@ def compare_issues(ai_issues: Dict[str, Any], static_issues: List[Dict]) -> List
             merged.append(static_issue)
 
     # Calculate statistics
-    count = {"AI": 0, "Static": 0, "Both": 0}
+    count = {"AI": 0, "Static": 0}
     severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
     for issue in merged:
@@ -165,12 +218,32 @@ def compare_issues(ai_issues: Dict[str, Any], static_issues: List[Dict]) -> List
 
     print(f"✅ Enhanced Error Comparator completed:")
     print(f"   📊 Total issues: {len(merged)}")
-    print(f"   🤖 AI only: {count['AI']}, 🔧 Static only: {count['Static']}, 🤝 Both: {count['Both']}")
+    print(f"   🤖 AI only: {count['AI']}, 🔧 Static only: {count['Static']}, 🤝 Both: {count['AI'] + count['Static']}")
     print(f"   🔴 Critical: {severity_count['critical']}, High: {severity_count['high']}")
     print(f"   🟡 Medium: {severity_count['medium']}, 🟢 Low: {severity_count['low']}")
 
     return merged
 
+
+def _categorize_issue(description: str) -> str:
+    """Categorize issue based on description keywords."""
+    desc_lower = description.lower()
+
+    security_keywords = ["security", "vulnerability", "injection", "xss", "csrf", "hardcode"]
+    performance_keywords = ["performance", "slow", "inefficient", "loop", "complexity"]
+    style_keywords = ["style", "formatting", "convention", "naming"]
+    bug_keywords = ["bug", "error", "exception", "null", "undefined"]
+
+    if any(keyword in desc_lower for keyword in security_keywords):
+        return "security"
+    elif any(keyword in desc_lower for keyword in performance_keywords):
+        return "performance"
+    elif any(keyword in desc_lower for keyword in style_keywords):
+        return "style"
+    elif any(keyword in desc_lower for keyword in bug_keywords):
+        return "bug"
+    else:
+        return "general"
 
 def _categorize_issue(description: str) -> str:
     """Categorize issue based on description keywords."""

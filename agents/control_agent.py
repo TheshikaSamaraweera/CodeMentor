@@ -3,12 +3,12 @@ import tempfile
 from typing import Dict, List, Any, Optional
 import logging
 from dataclasses import dataclass, asdict
-
 from agents.quality_agent import run_quality_agent
 from agents.static_analysis_agent import run_static_analysis
 from agents.error_comparator_agent import compare_issues
 from agents.critic_agent import run_critic_agent
 from agents.refactor_agent import run_refactor_agent
+from agents.security_agent import run_security_agent
 from utils.code_diff import show_code_diff
 from cli.apply_fixes import apply_fixes
 from memory.session_memory import remember_issue, remember_feedback, show_session_summary
@@ -138,6 +138,8 @@ class EnhancedControlAgent:
         quality_results = run_quality_agent(code, api_key, context)
         quality_score = quality_results.get("score", 0)
         print(f"✅ Quality Agent completed - Score: {quality_score}/100")
+        print("  🔒 Running Security Analysis...")
+        security_results = run_security_agent(code, api_key, context)
 
         # Static analysis
         print("  🔧 Running Static Analysis...")
@@ -152,14 +154,17 @@ class EnhancedControlAgent:
 
         # Merge and refine issues
         print("  🧮 Comparing and Merging Issues...")
-        merged_issues = compare_issues(quality_results, static_results)
+        merged_issues = compare_issues(quality_results, security_results, static_results)
 
+        print("  🤔 Running Critical Analysis...")
+        refined_issues = run_critic_agent(code, merged_issues, api_key)
         print("  🤔 Running Critical Analysis...")
         refined_issues = run_critic_agent(code, merged_issues, api_key)
 
         return {
             'quality_results': quality_results,
             'quality_score': quality_score,
+            'security_results': security_results,
             'static_results': static_results,
             'merged_issues': merged_issues,
             'refined_issues': refined_issues,
@@ -236,7 +241,29 @@ class EnhancedControlAgent:
 
         from controls.recursive_controller import build_langgraph_loop
         graph = build_langgraph_loop()
+        from controls.recursive_controller import build_langgraph_loop
+        graph = build_langgraph_loop()
 
+        state = {
+            "api_key": api_key,
+            "code": refactored_code,
+            "iteration": 0,
+            "continue_": True,
+            "best_code": code,
+            "best_score": initial_analysis['quality_score'],
+            "best_issues": refined_issues,
+            "issue_count": len(refined_issues),
+            "issues_fixed": 0,
+            "feedback": feedback,
+            "min_score_threshold": self.config.min_quality_threshold,
+            "max_high_severity_issues": 0,
+            "max_iterations": self.config.max_iterations,
+            "context": context,
+            "optimization_applied": False
+        }
+
+        # Run iterative refinement
+        final_state = graph.invoke(state)
         state = {
             "api_key": api_key,
             "code": refactored_code,
@@ -316,6 +343,95 @@ class EnhancedControlAgent:
             final_code=final_code,
             analysis_summary=summary
         )
+
+
+# Backward compatibility function
+def run_control_agent(code: str, language: str, project_dir: str = ".") -> Optional[str]:
+    """
+    Backward compatible function for running control agent.
+
+    Args:
+        code: Source code to analyze
+        language: Programming language
+        project_dir: Project directory path
+
+    Returns:
+        Refactored code or None
+    """
+    try:
+        config = AnalysisConfig(interactive_mode=True)
+        agent = EnhancedControlAgent(config)
+
+        results = agent.analyze_code_comprehensive(code, language, project_dir)
+
+        print(f"\n📊 Session Summary:")
+        show_session_summary()
+
+        return results.final_code
+
+    except Exception as e:
+        logger.error(f"Control agent failed: {e}")
+        print(f"❌ Control agent failed: {e}")
+        return None
+        # Process results
+        best_code = final_state.get("best_code", code)
+        final_score = final_state.get("best_score", initial_analysis['quality_score'])
+        iterations = len(final_state.get("history", []))
+        issues_resolved = sum(step.get('issues_fixed', 0) for step in final_state.get("history", []))
+
+        # Display final results
+        self._display_final_results(final_state, initial_analysis)
+
+        return self._create_analysis_results(
+            initial_score=initial_analysis['quality_score'],
+            final_score=final_score,
+            total_issues=len(refined_issues),
+            issues_resolved=issues_resolved,
+            iterations=iterations,
+            final_code=best_code,
+            summary={
+                'initial_analysis': initial_analysis,
+                'final_state': final_state,
+                'improvement': final_score - initial_analysis['quality_score']
+            }
+        )
+
+    def _display_final_results(self, final_state: Dict, initial_analysis: Dict):
+        """Display comprehensive final results."""
+        print(f"\n🎯 Final Optimization Results:")
+        print("=" * 50)
+
+        initial_score = initial_analysis['quality_score']
+        final_score = final_state.get("best_score", initial_score)
+        improvement = final_score - initial_score
+
+        print(f"📈 Quality Improvement: {initial_score:.1f} → {final_score:.1f} ({improvement:+.1f})")
+        print(f"🔄 Iterations Completed: {len(final_state.get('history', []))}")
+        print(f"✅ Total Issues Resolved: {sum(step.get('issues_fixed', 0) for step in final_state.get('history', []))}")
+
+        # Show iteration history
+        print(f"\n📚 Iteration History:")
+        for step in final_state.get("history", []):
+            print(f"  Iteration {step.get('iteration', 0)}: Score {step.get('score', 0):.1f}, "
+                  f"Fixed {step.get('issues_fixed', 0)} issues")
+
+        print(f"\n✨ Final Code Quality: {final_score:.1f}/100")
+
+    def _create_analysis_results(self, initial_score: float, final_score: float,
+                                 total_issues: int, issues_resolved: int,
+                                 iterations: int, final_code: str,
+                                 summary: Dict) -> AnalysisResults:
+        """Create structured analysis results."""
+        return AnalysisResults(
+            initial_score=initial_score,
+            final_score=final_score,
+            total_issues_found=total_issues,
+            issues_resolved=issues_resolved,
+            iterations_performed=iterations,
+            final_code=final_code,
+            analysis_summary=summary
+        )
+
 
 # Backward compatibility function
 def run_control_agent(code: str, language: str, project_dir: str = ".") -> Optional[str]:

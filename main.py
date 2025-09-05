@@ -7,14 +7,16 @@ from utils.file_loader import load_file
 from agents.quality_agent import run_quality_agent
 from agents.static_analysis_agent import run_static_analysis
 from agents.error_comparator_agent import compare_issues
+from agents.security_agent import run_security_agent
 from controls.recursive_controller import build_langgraph_loop
 from utils.context_analyzer import analyze_project_context
 from dotenv import load_dotenv
 
-def format_initial_analysis_report(quality_results, static_results, merged_issues, code_path):
-    # Unchanged, keeping original function
+
+def format_initial_analysis_report(quality_results, security_results, static_results, merged_issues, code_path):
     score = quality_results.get("score", 0)
-    ai_issues = quality_results.get("issues", [])
+    quality_issues = quality_results.get("issues", [])
+    security_issues = security_results.get("issues", [])
     static_issues = static_results
 
     total_issues = len(merged_issues)
@@ -174,7 +176,10 @@ def main():
 
     print("\n🔍 Phase 1: Running Initial Analysis...")
     quality_results = run_quality_agent(code, api_key, context)
+    quality_results = run_quality_agent(code, api_key, context)
     score = quality_results.get("score", 0)
+
+    security_results = run_security_agent(code, api_key, context)
 
     with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as temp_file:
         temp_file.write(code)
@@ -182,8 +187,8 @@ def main():
     static_results = run_static_analysis(temp_path)
     os.remove(temp_path)
 
-    merged_issues = compare_issues(quality_results, static_results)
-    report = format_initial_analysis_report(quality_results, static_results, merged_issues, code_path)
+    merged_issues = compare_issues(quality_results, security_results, static_results)
+    report = format_initial_analysis_report(quality_results, security_results, static_results, merged_issues, code_path)
     print(report)
 
     answer = input("\n🤖 Apply fixes and optimize code iteratively? (y/N): ").strip().lower()
@@ -220,6 +225,13 @@ def main():
     print("\n📚 Session Summary:")
     from memory.session_memory import show_session_summary
     show_session_summary()
+
+    final_report = format_iteration_summary(final)
+    print(final_report)
+    print("\n📚 Session Summary:")
+    from memory.session_memory import show_session_summary
+    show_session_summary()
+
 
 if __name__ == "__main__":
     main()
