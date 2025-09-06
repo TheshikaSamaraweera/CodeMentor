@@ -78,7 +78,7 @@ class ComprehensiveAnalysisAgent:
     def analyze_comprehensively(self, code: str, mode: str = "full_scan",
                                 context: Dict = None) -> Dict[str, Any]:
         """
-        Run comprehensive analysis with proper categorization.
+        Run comprehensive analysis with proper categorization and mode-based filtering.
         Each analysis type runs exactly once to avoid AI inconsistency.
 
         Args:
@@ -95,7 +95,7 @@ class ComprehensiveAnalysisAgent:
         # Determine which analyses to run based on mode
         analyses_to_run = self._get_analyses_for_mode(mode)
 
-        # Run all analyses in parallel (except AI ones to avoid rate limits)
+        # Run all analyses and collect issues
         all_issues = []
         analysis_results = {}
 
@@ -103,8 +103,12 @@ class ComprehensiveAnalysisAgent:
         if 'static' in analyses_to_run:
             print("🔧 Running Static Analysis...")
             static_issues = self._run_static_analysis(code, context)
-            all_issues.extend(static_issues)
-            analysis_results['static'] = static_issues
+
+            # Filter static issues based on mode
+            filtered_static_issues = self._filter_issues_by_mode(static_issues, mode)
+            all_issues.extend(filtered_static_issues)
+            analysis_results['static'] = filtered_static_issues
+            print(f"   📋 After mode filtering: {len(filtered_static_issues)} relevant issues")
 
         # Run AI analyses sequentially to avoid rate limits and ensure consistency
         ai_analyses = [a for a in analyses_to_run if a != 'static']
@@ -163,17 +167,56 @@ class ComprehensiveAnalysisAgent:
         return results
 
     def _get_analyses_for_mode(self, mode: str) -> List[str]:
-        """Determine which analyses to run based on mode."""
+        """
+        Determine which analyses to run based on mode.
+        Static analysis always runs to provide comprehensive coverage.
+        """
         mode_mapping = {
-            'quality': ['quality', 'static'],  # Quality + static for better coverage
-            'security': ['security', 'static'],  # Security + static for vulnerability detection
-            'code_smell': ['code_smell', 'static'],  # Code smell + static for comprehensive smell detection
-            'full_scan': ['quality', 'security', 'code_smell', 'static']
+            'quality': ['quality', 'static'],  # Quality AI + static (filtered for quality issues)
+            'security': ['security', 'static'],  # Security AI + static (filtered for security issues)
+            'code_smell': ['code_smell', 'static'],  # Code smell AI + static (filtered for code smell issues)
+            'full_scan': ['quality', 'security', 'code_smell', 'static']  # All analyses
         }
         return mode_mapping.get(mode, ['quality', 'static'])
 
+    def _filter_issues_by_mode(self, issues: List[CategorizedIssue], mode: str) -> List[CategorizedIssue]:
+        """
+        Filter issues based on the analysis mode to only show relevant issues.
+
+        Args:
+            issues: List of categorized issues
+            mode: Current analysis mode
+
+        Returns:
+            Filtered list of issues relevant to the mode
+        """
+        if mode == "full_scan":
+            # In full scan mode, show all issues
+            return issues
+
+        # Map modes to relevant categories
+        mode_category_map = {
+            'quality': [IssueCategory.QUALITY],
+            'security': [IssueCategory.SECURITY],
+            'code_smell': [IssueCategory.CODE_SMELL]
+        }
+
+        relevant_categories = mode_category_map.get(mode, [])
+
+        if not relevant_categories:
+            # If mode not recognized, return all issues
+            return issues
+
+        # Filter issues to only include those relevant to the current mode
+        filtered_issues = [
+            issue for issue in issues
+            if issue.category in relevant_categories
+        ]
+
+        return filtered_issues
+
     def _run_static_analysis(self, code: str, context: Dict) -> List[CategorizedIssue]:
-        """Run static analysis with proper categorization."""
+        """Run static analysis with proper categorization based on issue content."""
         static_issues = []
         try:
             # Detect language and create appropriate temp file
@@ -196,13 +239,28 @@ class ComprehensiveAnalysisAgent:
 
             try:
                 raw_results = run_static_analysis(temp_path)
+
+                # Classify static analysis issues by content
                 for issue in raw_results:
+                    # Determine the category based on issue content
+                    category = self._classify_static_issue(issue)
+
                     categorized = CategorizedIssue.from_raw_issue(
-                        issue, IssueCategory.STATIC, 'static_analysis'
+                        issue, category, 'static_analysis'
                     )
                     static_issues.append(categorized)
 
                 print(f"   📊 Static analysis found {len(static_issues)} issues")
+
+                # Show breakdown by category
+                category_counts = {}
+                for issue in static_issues:
+                    cat = issue.category.value
+                    category_counts[cat] = category_counts.get(cat, 0) + 1
+
+                if category_counts:
+                    breakdown = ", ".join([f"{cat}: {count}" for cat, count in category_counts.items()])
+                    print(f"   📂 Breakdown: {breakdown}")
 
             finally:
                 # Clean up temp file
@@ -213,6 +271,70 @@ class ComprehensiveAnalysisAgent:
             print(f"   ⚠️ Static analysis failed: {e}")
 
         return static_issues
+
+    def _classify_static_issue(self, issue: Dict) -> IssueCategory:
+        """
+        Classify static analysis issues into appropriate categories based on content.
+
+        Args:
+            issue: Raw static analysis issue
+
+        Returns:
+            Appropriate IssueCategory
+        """
+        description = issue.get('issue', issue.get('description', '')).lower()
+        suggestion = issue.get('suggestion', '').lower()
+        rule_id = issue.get('rule', '').lower()
+
+        # Security-related keywords and patterns
+        security_patterns = [
+            'security', 'vulnerability', 'injection', 'xss', 'csrf', 'hardcode',
+            'password', 'secret', 'token', 'key', 'crypto', 'hash', 'ssl', 'tls',
+            'sql injection', 'command injection', 'path traversal', 'eval', 'exec',
+            'unsafe', 'blacklist', 'whitelist', 'sanitize', 'escape'
+        ]
+
+        # Code smell patterns
+        code_smell_patterns = [
+            'complexity', 'too complex', 'long method', 'long function', 'long class',
+            'parameter list', 'too many parameters', 'duplicate', 'duplicated',
+            'dead code', 'unused', 'magic number', 'magic string', 'god class',
+            'large class', 'feature envy', 'data class', 'lazy class',
+            'long parameter list', 'primitive obsession', 'switch statement',
+            'cyclomatic', 'nesting', 'nested', 'cognitive', 'maintainability',
+            'refactor', 'extract method', 'extract class', 'rename', 'move method',
+            'naming', 'convention', 'style', 'format'
+        ]
+
+        # Quality/correctness patterns (bugs, errors, best practices)
+        quality_patterns = [
+            'error', 'exception', 'bug', 'null', 'undefined', 'none', 'missing',
+            'incorrect', 'wrong', 'invalid', 'unreachable', 'syntax', 'type',
+            'return', 'assignment', 'comparison', 'logic', 'condition',
+            'import', 'module', 'scope', 'variable', 'function', 'method',
+            'class', 'attribute', 'property', 'deprecated', 'obsolete'
+        ]
+
+        # Combine all text for analysis
+        full_text = f"{description} {suggestion} {rule_id}"
+
+        # Check security first (highest priority)
+        if any(pattern in full_text for pattern in security_patterns):
+            return IssueCategory.SECURITY
+
+        # Check code smells
+        elif any(pattern in full_text for pattern in code_smell_patterns):
+            return IssueCategory.CODE_SMELL
+
+        # Check for specific pylint/bandit rules that indicate categories
+        elif rule_id:
+            if any(sec_rule in rule_id for sec_rule in ['hardcoded', 'password', 'key', 'token', 'crypto']):
+                return IssueCategory.SECURITY
+            elif any(smell_rule in rule_id for smell_rule in ['complexity', 'too-many', 'duplicate', 'unused']):
+                return IssueCategory.CODE_SMELL
+
+        # Default to QUALITY for other static analysis issues
+        return IssueCategory.QUALITY
 
     def _run_quality_analysis(self, code: str, context: Dict) -> List[CategorizedIssue]:
         """Run quality analysis with proper categorization."""

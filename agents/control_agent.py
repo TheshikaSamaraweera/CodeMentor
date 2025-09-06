@@ -214,7 +214,7 @@ class EnhancedControlAgent:
         return user_input == "y"
 
     def _run_interactive_refinement(self, code: str, initial_analysis: Dict,
-                                    context: Dict, api_key: str) -> AnalysisResults:
+                                   context: Dict, api_key: str) -> AnalysisResults:
         """Run interactive code refinement process."""
         final_issues = initial_analysis.get('final_issues', [])
 
@@ -246,19 +246,9 @@ class EnhancedControlAgent:
                 improvement = temp_score - initial_score
 
                 print(f"   📈 Score: {initial_score:.1f} → {temp_score:.1f} ({improvement:+.1f})")
-                print(
-                    f"   📋 Issues: {initial_analysis['total_unique_issues']} → {temp_analysis['total_unique_issues']}")
+                print(f"   📋 Issues: {initial_analysis['total_unique_issues']} → {temp_analysis['total_unique_issues']}")
 
-                # Ask for iterative optimization
-                if temp_analysis['total_unique_issues'] > 0:
-                    continue_opt = input(f"\n♻️ Continue with iterative optimization? (y/N): ").strip().lower()
-                    if continue_opt == "y":
-                        return self._run_iterative_optimization(
-                            refactored_code, temp_analysis, context, api_key,
-                            initial_analysis, len(applied_issues)
-                        )
-
-                # Return current results if no further optimization
+                # Return current results
                 return self._create_analysis_results(
                     initial_score=initial_analysis['overall_score'],
                     final_score=temp_score,
@@ -403,9 +393,9 @@ class EnhancedControlAgent:
         print(f"\n✨ Final Code Quality: {final_score:.1f}/100")
 
     def _create_analysis_results(self, initial_score: float, final_score: float,
-                                 total_issues: int, issues_resolved: int,
-                                 iterations: int, final_code: str,
-                                 summary: Dict, issues_by_category: Dict) -> AnalysisResults:
+                                total_issues: int, issues_resolved: int,
+                                iterations: int, final_code: str,
+                                summary: Dict, issues_by_category: Dict) -> AnalysisResults:
         """Create structured analysis results."""
         return AnalysisResults(
             initial_score=initial_score,
@@ -421,7 +411,7 @@ class EnhancedControlAgent:
 
 # Backward compatibility function
 def run_control_agent(code: str, language: str, project_dir: str = ".",
-                      mode: str = "full_scan") -> Optional[str]:
+                     mode: str = "full_scan") -> Optional[str]:
     """
     Enhanced control agent with comprehensive analysis and optional iterative refinement.
 

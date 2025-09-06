@@ -216,23 +216,3 @@ def _categorize_issue(description: str) -> str:
         return "bug"
     else:
         return "general"
-
-def _categorize_issue(description: str) -> str:
-    """Categorize issue based on description keywords."""
-    desc_lower = description.lower()
-
-    security_keywords = ["security", "vulnerability", "injection", "xss", "csrf", "hardcode"]
-    performance_keywords = ["performance", "slow", "inefficient", "loop", "complexity"]
-    style_keywords = ["style", "formatting", "convention", "naming"]
-    bug_keywords = ["bug", "error", "exception", "null", "undefined"]
-
-    if any(keyword in desc_lower for keyword in security_keywords):
-        return "security"
-    elif any(keyword in desc_lower for keyword in performance_keywords):
-        return "performance"
-    elif any(keyword in desc_lower for keyword in style_keywords):
-        return "style"
-    elif any(keyword in desc_lower for keyword in bug_keywords):
-        return "bug"
-    else:
-        return "general"
