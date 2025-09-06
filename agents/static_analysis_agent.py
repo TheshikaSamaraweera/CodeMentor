@@ -1,13 +1,17 @@
 # agents/static_analysis_agent.py
 import subprocess
 import json
+import hashlib
 import tempfile
 import os
-from typing import List, Dict, Any, Optional
+from typing import Dict, List, Any, Set, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import logging
 from utils.language_detector import detect_language
 from utils.cache_manager import load_cached_results, save_cached_results
+from dataclasses import dataclass, asdict
+from collections import defaultdict
+from enum import Enum
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
