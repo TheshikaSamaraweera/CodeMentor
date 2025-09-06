@@ -3,6 +3,8 @@ import os
 import tempfile
 import json
 import argparse
+
+from agents.refactor_agent import run_refactor_agent
 from utils.file_loader import load_file
 from agents.quality_agent import run_quality_agent
 from agents.static_analysis_agent import run_static_analysis
@@ -13,13 +15,15 @@ from utils.context_analyzer import analyze_project_context
 from dotenv import load_dotenv
 from agents.code_smell_agent import run_code_smell_agent  # Added import
 from utils.language_detector import detect_language
+from cli.apply_fixes import apply_fixes  # Added import
 
-
-def format_initial_analysis_report(quality_results, security_results, static_results, merged_issues, code_path):
-    score = quality_results.get("score", 0) if quality_results else 0
+def format_initial_analysis_report(quality_results, security_results, static_results, smell_results, merged_issues, code_path):
+    # Use smell_results score for code_smell mode, otherwise quality_results
+    score = (smell_results.get("score", 0) if smell_results else quality_results.get("score", 0)) if (smell_results or quality_results) else 0
     quality_issues = quality_results.get("issues", []) if quality_results else []
     security_issues = security_results.get("issues", []) if security_results else []
     static_issues = static_results if static_results else []
+    smell_issues = smell_results.get("issues", []) if smell_results else []
 
     total_issues = len(merged_issues)
     ai_only_issues = len([i for i in merged_issues if i.get("source", "").lower() == "ai"])
@@ -77,7 +81,7 @@ def format_initial_analysis_report(quality_results, security_results, static_res
             issue.setdefault("confidence", 0.8)
             issue.setdefault("priority", 0.8 if issue["severity"] == "high" else 0.6)
             raw_source = issue.get("source", "AI")
-            source = source_map.get(raw_source.lower(), "AI")  # Default to 'AI' if unknown
+            source = source_map.get(raw_source.lower(), "AI")
             sources[source].append(issue)
 
         for source, issues in sources.items():
@@ -221,7 +225,7 @@ def main():
         if smell_results:
             merged_issues += smell_results.get("issues", [])
 
-    report = format_initial_analysis_report(quality_results, security_results, static_results, merged_issues, code_path)
+    report = format_initial_analysis_report(quality_results, security_results, static_results, smell_results, merged_issues, code_path)
     print(report)
 
     answer = input("\n🤖 Apply fixes and optimize code iteratively? (y/N): ").strip().lower()
@@ -229,38 +233,30 @@ def main():
         print("\n🚫 Exiting after initial review. No changes applied.")
         return
 
-    print("\n♻️ Entering Iterative Optimization Mode...\n")
-    state = {
-        "api_key": api_key,
-        "code": code,
-        "iteration": 0,
-        "continue_": True,
-        "best_code": code,
-        "best_score": quality_results.get("score", 0) if quality_results else 0,
-        "best_issues": merged_issues,
-        "issue_count": len(merged_issues),
-        "issues_fixed": 0,
-        "feedback": [],
-        "min_score_threshold": 90.0,  # Match config.yaml default
-        "max_high_severity_issues": 0,
-        "max_iterations": args.max_iterations,
-        "context": context,
-        "optimization_applied": False,
-        "previous_scores": [],
-        "stagnation_count": 0,
-        "user_stop": args.force_stop
-    }
+    # Apply user-selected fixes
+    feedback = apply_fixes(code, code, merged_issues, api_key)
+    refactored_code = code
+    for f in feedback:
+        if f["applied"]:
+            refactored_code = run_refactor_agent(code, [f["issue"]], api_key) or code
+            break  # Use the last applied code (already handled in apply_fixes)
 
-    graph = build_langgraph_loop()
-    final = graph.invoke(state)
-    final_report = format_iteration_summary(final)
-    print(final_report)
-    print("\n📚 Session Summary:")
-    from memory.session_memory import show_session_summary
-    show_session_summary()
+    # Prompt user for another analysis
+    if any(f["applied"] for f in feedback):
+        answer = input("\n🤖 Would you like to run another analysis and apply more fixes? (y/N): ").strip().lower()
+        if answer == "y":
+            print("\n♻️ Starting Iterative Optimization...")
+            from agents.control_agent import run_control_agent
+            final_code = run_control_agent(refactored_code, language, project_dir, mode=args.mode)
+        else:
+            print("\n🚫 Exiting after applying fixes. No further analysis performed.")
+            final_code = refactored_code
+    else:
+        final_code = refactored_code
 
-    final_report = format_iteration_summary(final)
-    print(final_report)
+    if final_code:
+        print("\n📝 Final Refactored Code:")
+        print(final_code)
     print("\n📚 Session Summary:")
     from memory.session_memory import show_session_summary
     show_session_summary()
