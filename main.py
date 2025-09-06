@@ -3,7 +3,10 @@ import os
 import tempfile
 import json
 import argparse
+from datetime import datetime
 
+from utils.file_loader import load_file
+from agents.iterative_analysis_agent import run_iterative_analysis
 from agents.refactor_agent import run_refactor_agent
 from utils.file_loader import load_file
 from agents.quality_agent import run_quality_agent
@@ -25,85 +28,93 @@ def format_initial_analysis_report(quality_results, security_results, static_res
     static_issues = static_results if static_results else []
     smell_issues = smell_results.get("issues", []) if smell_results else []
 
-    total_issues = len(merged_issues)
-    ai_only_issues = len([i for i in merged_issues if i.get("source", "").lower() == "ai"])
-    static_only_issues = len([i for i in merged_issues if i.get("source", "").lower() == "static"])
-    both_issues = len([i for i in merged_issues if i.get("source", "").lower() == "both"])
+def format_iterative_analysis_report(results: dict, code_path: str) -> str:
+    """Format comprehensive iterative analysis report."""
 
-    high_severity = [i for i in merged_issues if i.get("severity") == "high"]
-    medium_severity = [i for i in merged_issues if i.get("severity") == "medium"]
-    low_severity = [i for i in merged_issues if i.get("severity") == "low"]
+    # Calculate overall score
+    total_issues = results['total_unique_issues']
+    score = 100.0 if total_issues == 0 else max(0, 100 - min(total_issues * 5, 100))
 
     report = f"""
 {'=' * 80}
-🔍 AI CODE REVIEWER - INITIAL ANALYSIS REPORT
+🔄 AI CODE REVIEWER - ITERATIVE ANALYSIS REPORT
 {'=' * 80}
 
 📁 File Analyzed: {code_path}
-📊 Overall Quality Score: {score}/100
-🕒 Analysis Timestamp: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🎯 Analysis Mode: {results['mode'].replace('_', ' ').title()}
+📊 Overall Quality Score: {score:.1f}/100
+🔄 Iterations Completed: {results['iterations_run']}
+⏹️ Stopping Reason: {results['stopping_reason']}
+🕒 Analysis Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 {'=' * 80}
-📈 SUMMARY STATISTICS
-{'=' * 80}
-• Total Issues Found: {total_issues}
-• AI Analysis Issues: {ai_only_issues}
-• Static Analysis Issues: {static_only_issues}
-• Confirmed Issues (Both): {both_issues}
-
-📊 SEVERITY BREAKDOWN:
-• 🔴 High Priority: {len(high_severity)} issues
-• 🟡 Medium Priority: {len(medium_severity)} issues
-• 🟢 Low Priority: {len(low_severity)} issues
-
-{'=' * 80}
-🔍 DETAILED ISSUE ANALYSIS
+📈 ITERATIVE ANALYSIS PROGRESSION
 {'=' * 80}
 """
 
-    if not merged_issues:
-        report += "✅ No issues detected! Your code appears to be clean.\n"
-    else:
-        sources = {"AI": [], "Static": [], "Both": []}
-        # Normalize source explicitly to match dictionary keys
-        source_map = {
-            "ai": "AI",
-            "Ai": "AI",
-            "AI": "AI",
-            "static": "Static",
-            "Static": "Static",
-            "both": "Both",
-            "Both": "Both"
+    # Show iteration progression
+    for iteration in results['iteration_history']:
+        report += f"\n🔍 Iteration {iteration['iteration']}:\n"
+        report += f"   📊 Total Issues: {iteration['total_issues']}\n"
+        report += f"   ✨ New Issues: {iteration['new_issues']}\n"
+
+        if iteration.get('issues_by_category'):
+            report += f"   📂 By Category: "
+            cat_summary = []
+            for cat, count in iteration['issues_by_category'].items():
+                cat_summary.append(f"{cat}: {count}")
+            report += ", ".join(cat_summary) + "\n"
+
+    report += f"\n{'=' * 80}\n"
+    report += "📊 FINAL ISSUE SUMMARY\n"
+    report += "=" * 80 + "\n"
+    report += f"• Total Unique Issues Found: {total_issues}\n"
+
+    if results.get('issues_by_category'):
+        report += "\n📂 ISSUES BY CATEGORY:\n"
+        report += "-" * 40 + "\n"
+
+        category_emojis = {
+            'quality': '🎯',
+            'security': '🔒',
+            'code_smell': '👃',
+            'static': '🔧'
         }
-        for issue in merged_issues:
-            issue.setdefault("explanation", "No specific explanation provided.")
-            issue.setdefault("severity", "medium")
-            issue.setdefault("confidence", 0.8)
-            issue.setdefault("priority", 0.8 if issue["severity"] == "high" else 0.6)
-            raw_source = issue.get("source", "AI")
-            source = source_map.get(raw_source.lower(), "AI")
-            sources[source].append(issue)
 
-        for source, issues in sources.items():
-            if issues:
-                source_icon = "🤖" if source == "AI" else "🔧" if source == "Static" else "🤝"
-                report += f"\n{source_icon} {source.upper()} ANALYSIS ISSUES ({len(issues)} found):\n"
-                report += "-" * 60 + "\n"
+        for category, issues in results['issues_by_category'].items():
+            emoji = category_emojis.get(category, '📋')
+            report += f"\n{emoji} {category.upper()} ISSUES ({len(issues)} found):\n"
 
-                for i, issue in enumerate(issues, 1):
-                    issue_json = {
-                        "line": issue.get("line", 0),
-                        "description": issue.get("description", issue.get("issue", "No description")),
-                        "suggestion": issue.get("suggestion", "No suggestion provided"),
-                        "explanation": issue.get("explanation", "No specific explanation provided"),
-                        "severity": issue.get("severity", "medium"),
-                        "confidence": issue.get("confidence", 0.8),
-                        "priority": issue.get("priority", 0.6)
-                    }
-                    report += f"{i:2d}. {json.dumps(issue_json, indent=2)}\n"
-                    report += "\n"
+            # Group by severity
+            severity_groups = {'high': [], 'medium': [], 'low': []}
+            for issue in issues:
+                severity = issue.get('severity', 'medium')
+                if severity in severity_groups:
+                    severity_groups[severity].append(issue)
 
-    report += f"{'=' * 80}\n"
+            for severity in ['high', 'medium', 'low']:
+                if severity_groups[severity]:
+                    severity_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}[severity]
+                    report += f"   {severity_emoji} {severity.upper()}: {len(severity_groups[severity])} issues\n"
+
+                    # Show detailed issues
+                    for i, issue in enumerate(severity_groups[severity], 1):
+                        issue_json = {
+                            "line": issue.get("line", 0),
+                            "description": issue.get("description", "No description"),
+                            "suggestion": issue.get("suggestion", "No suggestion"),
+                            "severity": issue.get("severity", "medium"),
+                            "confidence": issue.get("confidence", 0.8),
+                            "source": issue.get("source_agent", "unknown"),
+                            "iteration_found": issue.get("iteration_found", 1)
+                        }
+                        report += f"      {i}. {json.dumps(issue_json, indent=6)}\n"
+                        report += "\n"
+
+    else:
+        report += "✅ No issues detected! Your code appears to be clean.\n"
+
+    report += f"\n{'=' * 80}\n"
     report += "📊 QUALITY SCORE INTERPRETATION\n"
     report += "=" * 80 + "\n"
 
@@ -122,50 +133,19 @@ def format_initial_analysis_report(quality_results, security_results, static_res
     if total_issues == 0:
         report += "• Your code is in excellent condition!\n"
         report += "• Consider running optimization for performance improvements.\n"
-    elif len(high_severity) > 0:
-        report += f"• 🔴 Address {len(high_severity)} high-priority issues first.\n"
-    if len(medium_severity) > 0:
-        report += f"• 🟡 Review {len(medium_severity)} medium-priority issues.\n"
-    if score < 80:
-        report += "• Consider running iterative optimization to improve code quality.\n"
+    else:
+        high_issues = sum(len(issues) for category, issues in results.get('issues_by_category', {}).items()
+                         for issue in issues if issue.get('severity') == 'high')
+
+        if high_issues > 0:
+            report += f"• 🔴 Address {high_issues} high-priority issues first.\n"
+
+        report += f"• Review and fix issues category by category for best results.\n"
+        report += f"• Run iterative refinement to improve code quality step by step.\n"
 
     report += f"\n{'=' * 80}\n"
     return report
 
-def format_iteration_summary(final):
-    report = f"""
-{'=' * 80}
-🎯 ITERATIVE OPTIMIZATION COMPLETE
-{'=' * 80}
-
-📊 FINAL RESULTS:
-• Total Iterations: {len(final.get('history', []))}
-• Best Quality Score: {final.get('best_score', 'N/A')}
-• Final Code Length: {len(final.get('best_code', ''))} characters
-• Total Issues Fixed: {sum(h.get('issues_fixed', 0) for h in final.get('history', []))}
-
-{'=' * 80}
-📚 ITERATION HISTORY
-{'=' * 80}
-"""
-
-    for i, step in enumerate(final.get("history", []), 1):
-        report += f"\n🧾 Iteration {step.get('iteration')}:\n"
-        report += f"   📊 Quality Score: {step.get('score', 'N/A')}\n"
-        report += f"   🔍 Issues Remaining: {step.get('issue_count', 0)}\n"
-        report += f"   ✅ Issues Fixed: {step.get('issues_fixed', 0)}\n"
-        report += f"   🔴 High-Severity Issues: {step.get('high_severity_count', 0)}\n"
-        report += f"   🚀 Optimization Applied: {'Yes' if step.get('optimization_applied') else 'No'}\n"
-        report += f"   📝 Code Preview: {step.get('refactored_code', '')}\n"
-        report += "-" * 40 + "\n"
-
-    report += f"\n{'=' * 80}\n"
-    report += "✅ FINAL REFACTORED CODE\n"
-    report += "=" * 80 + "\n"
-    report += final.get("best_code", "[No final code]")
-    report += f"\n{'=' * 80}\n"
-
-    return report
 
 def main():
     load_dotenv()
@@ -175,10 +155,10 @@ def main():
         return
 
     # Add CLI argument parsing
-    parser = argparse.ArgumentParser(description="AI Code Reviewer")
+    parser = argparse.ArgumentParser(description="AI Code Reviewer with Iterative Analysis")
     parser.add_argument("code_path", help="Path to the code file")
-    parser.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
-    parser.add_argument("--force-stop", action="store_true", help="Force stop after one iteration")
+    parser.add_argument("--max-iterations", type=int, default=3,
+                       help="Maximum number of analysis iterations")
     parser.add_argument(
         "--mode",
         choices=["quality", "security", "code_smell", "full_scan"],
@@ -197,67 +177,65 @@ def main():
     context = analyze_project_context(project_dir)
     language = detect_language(code_path)
 
-    print(f"\n🔍 Phase 1: Running {args.mode.replace('_', ' ').title()} Analysis...")
-    quality_results = security_results = static_results = smell_results = None
+    print(f"\n🔄 Starting Iterative {args.mode.replace('_', ' ').title()} Analysis...")
 
-    if args.mode in ["quality", "full_scan"]:
-        quality_results = run_quality_agent(code, api_key, context)
-    if args.mode in ["security", "full_scan"]:
-        security_results = run_security_agent(code, api_key, context)
-    if args.mode in ["code_smell", "full_scan"]:
-        smell_results = run_code_smell_agent(code, api_key, language=language)
-    if args.mode == "full_scan":
-        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as temp_file:
-            temp_file.write(code)
-            temp_path = temp_file.name
-        static_results = run_static_analysis(temp_path)
-        os.remove(temp_path)
+    # Run iterative analysis
+    results = run_iterative_analysis(
+        code=code,
+        api_key=api_key,
+        mode=args.mode,
+        context=context
+    )
 
-    merged_issues = []
-    if args.mode == "quality":
-        merged_issues = quality_results.get("issues", []) if quality_results else []
-    elif args.mode == "security":
-        merged_issues = security_results.get("issues", []) if security_results else []
-    elif args.mode == "code_smell":
-        merged_issues = smell_results.get("issues", []) if smell_results else []
-    elif args.mode == "full_scan":
-        merged_issues = compare_issues(quality_results, security_results, static_results)
-        if smell_results:
-            merged_issues += smell_results.get("issues", [])
-
-    report = format_initial_analysis_report(quality_results, security_results, static_results, smell_results, merged_issues, code_path)
+    # Generate and display comprehensive report
+    report = format_iterative_analysis_report(results, code_path)
     print(report)
 
-    answer = input("\n🤖 Apply fixes and optimize code iteratively? (y/N): ").strip().lower()
-    if answer != "y":
-        print("\n🚫 Exiting after initial review. No changes applied.")
-        return
-
-    # Apply user-selected fixes
-    feedback = apply_fixes(code, code, merged_issues, api_key)
-    refactored_code = code
-    for f in feedback:
-        if f["applied"]:
-            refactored_code = run_refactor_agent(code, [f["issue"]], api_key) or code
-            break  # Use the last applied code (already handled in apply_fixes)
-
-    # Prompt user for another analysis
-    if any(f["applied"] for f in feedback):
-        answer = input("\n🤖 Would you like to run another analysis and apply more fixes? (y/N): ").strip().lower()
+    # Ask user if they want to apply fixes
+    if results['total_unique_issues'] > 0:
+        answer = input("\n🤖 Apply fixes and optimize code? (y/N): ").strip().lower()
         if answer == "y":
-            print("\n♻️ Starting Iterative Optimization...")
-            from agents.control_agent import run_control_agent
-            final_code = run_control_agent(refactored_code, language, project_dir, mode=args.mode)
-        else:
-            print("\n🚫 Exiting after applying fixes. No further analysis performed.")
-            final_code = refactored_code
-    else:
-        final_code = refactored_code
+            final_issues = results.get('final_issues', [])
 
-    if final_code:
-        print("\n📝 Final Refactored Code:")
-        print(final_code)
-    print("\n📚 Session Summary:")
+            print(f"\n🔧 Applying User-Selected Fixes...")
+            feedback = apply_fixes(code, code, final_issues, api_key)
+
+            # Apply refactoring for accepted fixes
+            refactored_code = code
+            applied_issues = [f["issue"] for f in feedback if f["applied"]]
+
+            if applied_issues:
+                print(f"\n🛠️ Refactoring code with {len(applied_issues)} applied fixes...")
+                refactored_code = run_refactor_agent(code, applied_issues, api_key) or code
+
+                if refactored_code != code:
+                    print(f"\n📝 Final Refactored Code:")
+                    print(refactored_code)
+
+                    # Optionally re-analyze the refactored code
+                    reanalyze = input("\n🔍 Re-analyze the refactored code? (y/N): ").strip().lower()
+                    if reanalyze == "y":
+                        print(f"\n🔄 Re-analyzing refactored code...")
+                        final_results = run_iterative_analysis(
+                            code=refactored_code,
+                            api_key=api_key,
+                            mode=args.mode,
+                            context=context
+                        )
+
+                        final_report = format_iterative_analysis_report(final_results, f"{code_path} (refactored)")
+                        print(final_report)
+                else:
+                    print("⚠️ No changes were made during refactoring.")
+            else:
+                print("ℹ️ No fixes were applied.")
+        else:
+            print("\n🚫 Exiting after analysis. No changes applied.")
+    else:
+        print("\n✅ No issues found! Your code is in excellent condition.")
+
+    # Show session summary
+    print(f"\n📚 Session Summary:")
     from memory.session_memory import show_session_summary
     show_session_summary()
 

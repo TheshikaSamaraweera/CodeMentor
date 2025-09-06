@@ -16,6 +16,7 @@ from memory.session_memory import remember_issue, remember_feedback, show_sessio
 from agents.optimization_agent import run_optimization_agent
 from utils.language_detector import detect_language
 from utils.context_analyzer import analyze_project_context
+from agents.iterative_analysis_agent import run_iterative_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,11 @@ class AnalysisResults:
     iterations_performed: int
     final_code: str
     analysis_summary: Dict[str, Any]
+    issues_by_category: Dict[str, List[Dict]]
 
 class EnhancedControlAgent:
-    """Enhanced control agent with better flow management and configuration."""
+    """Enhanced control agent with iterative analysis and better categorization."""
+
     def __init__(self, config: AnalysisConfig = None, mode: str = "full_scan"):
         self.config = config or AnalysisConfig()
         self.mode = mode
@@ -51,7 +54,7 @@ class EnhancedControlAgent:
                                    language: str,
                                    project_dir: str = ".") -> AnalysisResults:
         """
-        Comprehensive code analysis with structured results.
+        Comprehensive code analysis with iterative analysis and categorization.
 
         Args:
             code: Source code to analyze
@@ -59,10 +62,10 @@ class EnhancedControlAgent:
             project_dir: Project directory for context
 
         Returns:
-            Structured analysis results
+            Structured analysis results with categorized issues
         """
-        print(f"\n🧠 Enhanced Control Agent Activated")
-        print(f"➡️ Language: {language}")
+        print(f"\n🧠 Enhanced Control Agent Activated (Iterative Mode)")
+        print(f"➡️ Language: {language}, Mode: {self.mode}")
         print("=" * 60)
 
         # Validate inputs
@@ -76,44 +79,51 @@ class EnhancedControlAgent:
         print(f"📋 Project Context Analysis:")
         self._print_context_summary(context)
 
-        # Phase 1: Initial Analysis
-        print("\n🔍 Phase 1: Comprehensive Initial Analysis")
+        # Phase 1: Iterative Analysis
+        print(f"\n🔍 Phase 1: Iterative {self.mode.replace('_', ' ').title()} Analysis")
         print("-" * 40)
 
-        initial_analysis = self._run_initial_analysis(code, language, context, api_key)
+        iterative_results = run_iterative_analysis(
+            code=code,
+            api_key=api_key,
+            mode=self.mode,
+            context=context
+        )
 
-        if not self.config.interactive_mode:
-            return self._create_analysis_results(
-                initial_score=initial_analysis['quality_score'],
-                final_score=initial_analysis['quality_score'],
-                total_issues=len(initial_analysis['merged_issues']),
-                issues_resolved=0,
-                iterations=0,
-                final_code=code,
-                summary=initial_analysis
-            )
-
-        # Display initial results
-        self._display_initial_results(initial_analysis)
+        # Display categorized results
+        self._display_categorized_results(iterative_results)
 
         # Check if refinement is needed/wanted
-        if not self._should_proceed_with_refinement(initial_analysis):
+        if not self.config.interactive_mode:
             return self._create_analysis_results(
-                initial_score=initial_analysis['quality_score'],
-                final_score=initial_analysis['quality_score'],
-                total_issues=len(initial_analysis['merged_issues']),
+                initial_score=self._calculate_overall_score(iterative_results),
+                final_score=self._calculate_overall_score(iterative_results),
+                total_issues=iterative_results['total_unique_issues'],
                 issues_resolved=0,
-                iterations=0,
+                iterations=iterative_results['iterations_run'],
                 final_code=code,
-                summary=initial_analysis
+                summary=iterative_results,
+                issues_by_category=iterative_results.get('issues_by_category', {})
+            )
+
+        if not self._should_proceed_with_refinement(iterative_results):
+            return self._create_analysis_results(
+                initial_score=self._calculate_overall_score(iterative_results),
+                final_score=self._calculate_overall_score(iterative_results),
+                total_issues=iterative_results['total_unique_issues'],
+                issues_resolved=0,
+                iterations=iterative_results['iterations_run'],
+                final_code=code,
+                summary=iterative_results,
+                issues_by_category=iterative_results.get('issues_by_category', {})
             )
 
         # Phase 2: Interactive Refinement
-        print("\n🔁 Phase 2: Interactive Code Refinement")
+        print(f"\n🔁 Phase 2: Interactive Code Refinement")
         print("-" * 40)
 
-        refinement_results = self._run_iterative_refinement(
-            code, initial_analysis, context, api_key
+        refinement_results = self._run_interactive_refinement(
+            code, iterative_results, context, api_key
         )
 
         return refinement_results
@@ -133,213 +143,162 @@ class EnhancedControlAgent:
         if context.get('conventions'):
             print(f"  ⚙️  Conventions: {', '.join(context.get('conventions', {}).keys())}")
 
-    def _run_initial_analysis(self, code: str, language: str, context: Dict, api_key: str) -> Dict:
-        """Run comprehensive initial analysis."""
-        quality_results = None
-        security_results = None
-        static_results = None
-        smell_results = None
-        merged_issues = []
-        quality_score = 0
-        refined_issues = []
+    def _display_categorized_results(self, results: Dict[str, Any]):
+        """Display results organized by category."""
+        print(f"\n📊 Iterative Analysis Results:")
+        print(f"  Mode: {results['mode']}")
+        print(f"  Iterations: {results['iterations_run']}")
+        print(f"  Total Issues: {results['total_unique_issues']}")
+        print(f"  Stopping Reason: {results['stopping_reason']}")
 
-        if self.mode in ["quality", "full_scan"]:
-            # Quality analysis
-            print("  🤖 Running AI Quality Analysis...")
-            quality_results = run_quality_agent(code, api_key, context)
-            quality_score = quality_results.get("score", 0)
-            print(f"✅ Quality Agent completed - Score: {quality_score}/100")
+        # Show iteration progression
+        print(f"\n📈 Analysis Progress:")
+        for iteration in results['iteration_history']:
+            print(f"  Iteration {iteration['iteration']}: "
+                  f"{iteration['total_issues']} total, "
+                  f"{iteration['new_issues']} new issues found")
 
-        if self.mode in ["security", "full_scan"]:
-            print("  🔒 Running Security Analysis...")
-            security_results = run_security_agent(code, api_key, context)
+        # Display issues by category
+        issues_by_category = results.get('issues_by_category', {})
+        if issues_by_category:
+            print(f"\n📂 Issues by Category:")
 
-        if self.mode in ["code_smell", "full_scan"]:
-            print("  👃 Running Code Smell Analysis...")
-            smell_results = run_code_smell_agent(code, api_key=api_key)
-            if self.mode == "code_smell":
-                quality_score = smell_results.get("score", 0)  # Use smell score for code_smell mode
-                print(f"✅ Code Smell Agent completed - Score: {quality_score}/100")
+            category_emojis = {
+                'quality': '🎯',
+                'security': '🔒',
+                'code_smell': '👃',
+                'static': '🔧'
+            }
 
-        if self.mode == "full_scan":
-            print("  🔧 Running Static Analysis...")
-            with tempfile.NamedTemporaryFile(suffix=f".{language.lower()}", delete=False, mode="w") as temp_file:
-                temp_file.write(code)
-                temp_path = temp_file.name
+            for category, issues in issues_by_category.items():
+                emoji = category_emojis.get(category, '📋')
+                print(f"\n  {emoji} {category.upper()} ({len(issues)} issues):")
 
-            try:
-                static_results = run_static_analysis(temp_path)
-            finally:
-                os.unlink(temp_path)
+                # Group by severity
+                severity_groups = {'high': [], 'medium': [], 'low': []}
+                for issue in issues[:10]:  # Limit display
+                    severity = issue.get('severity', 'medium')
+                    if severity in severity_groups:
+                        severity_groups[severity].append(issue)
 
-        # Merge and refine issues
-        print("  🧮 Comparing and Merging Issues...")
-        if self.mode == "quality":
-            merged_issues = quality_results.get("issues", []) if quality_results else []
-        elif self.mode == "security":
-            merged_issues = security_results.get("issues", []) if security_results else []
-        elif self.mode == "code_smell":
-            merged_issues = smell_results.get("issues", []) if smell_results else []
-        elif self.mode == "full_scan":
-            # For full_scan, merge quality, security, static, and add smell issues
-            merged_issues = compare_issues(quality_results, security_results, static_results)
-            if smell_results:
-                merged_issues += smell_results.get("issues", [])
+                for severity in ['high', 'medium', 'low']:
+                    if severity_groups[severity]:
+                        severity_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}[severity]
+                        print(f"    {severity_emoji} {severity.upper()}: {len(severity_groups[severity])} issues")
 
-        if merged_issues:
-            print("  🤔 Running Critical Analysis...")
-            refined_issues = run_critic_agent(code, merged_issues, api_key)
+                        # Show first few issues
+                        for i, issue in enumerate(severity_groups[severity][:3], 1):
+                            line = issue.get('line', 'N/A')
+                            desc = issue.get('description', 'No description')[:80]
+                            print(f"      {i}. Line {line}: {desc}...")
 
-        return {
-            'quality_results': quality_results,
-            'quality_score': quality_score,
-            'security_results': security_results,
-            'static_results': static_results,
-            'smell_results': smell_results,  # Added
-            'merged_issues': merged_issues,
-            'refined_issues': refined_issues,
-            'context': context
+                        if len(severity_groups[severity]) > 3:
+                            print(f"      ... and {len(severity_groups[severity]) - 3} more")
+
+    def _calculate_overall_score(self, results: Dict[str, Any]) -> float:
+        """Calculate overall quality score based on issues."""
+        total_issues = results.get('total_unique_issues', 0)
+        if total_issues == 0:
+            return 100.0
+
+        # Weight penalties by category and severity
+        category_weights = {
+            'security': 3.0,
+            'quality': 2.0,
+            'code_smell': 1.5,
+            'static': 1.0
         }
 
-    def _display_initial_results(self, analysis: Dict):
-        """Display formatted initial analysis results."""
-        quality_score = analysis['quality_score']
-        refined_issues = analysis['refined_issues']
+        severity_weights = {
+            'high': 3.0,
+            'medium': 2.0,
+            'low': 1.0
+        }
 
-        print(f"\n📊 Initial Analysis Results:")
-        print(f"  Quality Score: {quality_score}/100")
-        print(f"  Issues Found: {len(refined_issues)}")
+        total_penalty = 0.0
+        issues_by_category = results.get('issues_by_category', {})
 
-        # Group issues by severity
-        severity_counts = {}
-        for issue in refined_issues:
-            severity = issue.get('severity', 'medium')
-            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        for category, issues in issues_by_category.items():
+            cat_weight = category_weights.get(category, 1.0)
 
-        if severity_counts:
-            print("  Issue Breakdown:")
-            for severity, count in severity_counts.items():
-                emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "⚪")
-                print(f"    {emoji} {severity.title()}: {count}")
+            for issue in issues:
+                sev_weight = severity_weights.get(issue.get('severity', 'medium'), 2.0)
+                confidence = issue.get('confidence', 0.8)
+                penalty = cat_weight * sev_weight * confidence * 2  # Base penalty
+                total_penalty += penalty
 
-        # Display top issues
-        if refined_issues:
-            print(f"\n📋 Top Issues Found:")
-            for i, issue in enumerate(refined_issues[:5], 1):  # Show top 5
-                print(f"\n  {i}. Line {issue.get('line', 'N/A')} | {issue.get('severity', 'medium').upper()}")
-                print(f"     🔍 {issue.get('description', 'No description')}")
-                print(f"     💡 {issue.get('suggestion', 'No suggestion')}")
-                if issue.get('explanation'):
-                    print(f"     📝 {issue.get('explanation')}")
+        # Cap penalty and convert to score
+        max_penalty = min(total_penalty, 100)
+        return max(0, 100 - max_penalty)
 
-    def _should_proceed_with_refinement(self, analysis: Dict) -> bool:
+    def _should_proceed_with_refinement(self, results: Dict[str, Any]) -> bool:
         """Determine if refinement should proceed."""
-        quality_score = analysis['quality_score']
-        issues_count = len(analysis['refined_issues'])
+        score = self._calculate_overall_score(results)
+        total_issues = results['total_unique_issues']
 
         # Auto-proceed if quality is below threshold
-        if quality_score < self.config.min_quality_threshold:
-            print(f"\n⚡ Quality score ({quality_score}) below threshold ({self.config.min_quality_threshold})")
+        if score < self.config.min_quality_threshold:
+            print(f"\n⚡ Quality score ({score:.1f}) below threshold ({self.config.min_quality_threshold})")
             return True
 
-        # Ask user in interactive mode
-        if issues_count == 0:
-            print("\n✅ No issues found! Code quality looks good.")
+        if total_issues == 0:
+            print(f"\n✅ No issues found! Code quality looks good.")
             return False
 
-        user_input = input(f"\n🤖 Apply fixes and optimize code iteratively? (y/N): ").strip().lower()
+        user_input = input(f"\n🤖 Apply fixes and optimize code? (y/N): ").strip().lower()
         return user_input == "y"
 
-    def _run_iterative_refinement(self, code: str, initial_analysis: Dict, context: Dict,
-                                 api_key: str) -> AnalysisResults:
-        """Run iterative code refinement process."""
-        refined_issues = initial_analysis['refined_issues']
+    def _run_interactive_refinement(self, code: str, analysis_results: Dict,
+                                   context: Dict, api_key: str) -> AnalysisResults:
+        """Run interactive code refinement process."""
+        final_issues = analysis_results.get('final_issues', [])
 
-        # Initial fix application with user selection
-        print("  🔧 Applying User-Selected Fixes...")
-        feedback = apply_fixes(code, code, refined_issues, api_key)
+        print(f"  🔧 Applying User-Selected Fixes...")
+        feedback = apply_fixes(code, code, final_issues, api_key)
 
-        # Use the refactored code from apply_fixes if any fixes were applied
+        # Apply refactoring
         refactored_code = code
         applied_issues = [f["issue"] for f in feedback if f["applied"]]
         if applied_issues:
             refactored_code = run_refactor_agent(code, applied_issues, api_key) or code
 
-        # Setup iterative refinement using existing recursive controller
-        print("\n♻️ Starting Iterative Optimization...")
+        # Calculate final metrics
+        initial_score = self._calculate_overall_score(analysis_results)
 
-        from controls.recursive_controller import build_langgraph_loop
-        graph = build_langgraph_loop()
-
-        state = {
-            "api_key": api_key,
-            "code": refactored_code,
-            "iteration": 0,
-            "continue_": True,
-            "best_code": code,
-            "best_score": initial_analysis['quality_score'],
-            "best_issues": refined_issues,
-            "issue_count": len(refined_issues) - len(applied_issues),
-            "issues_fixed": len(applied_issues),
-            "feedback": feedback,
-            "min_score_threshold": self.config.min_quality_threshold,
-            "max_high_severity_issues": 0,
-            "max_iterations": self.config.max_iterations,
-            "context": context,
-            "optimization_applied": False
-        }
-
-        # Run iterative refinement
-        final_state = graph.invoke(state)
-
-        # Process results
-        best_code = final_state.get("best_code", code)
-        final_score = final_state.get("best_score", initial_analysis['quality_score'])
-        iterations = len(final_state.get("history", []))
-        issues_resolved = sum(step.get('issues_fixed', 0) for step in final_state.get("history", [])) + len(applied_issues)
-
-        # Display final results
-        self._display_final_results(final_state, initial_analysis)
+        # Re-analyze refactored code for final score
+        if refactored_code != code:
+            print(f"\n📊 Re-analyzing refactored code...")
+            final_analysis = run_iterative_analysis(
+                code=refactored_code,
+                api_key=api_key,
+                mode=self.mode,
+                context=context
+            )
+            final_score = self._calculate_overall_score(final_analysis)
+            final_issues_by_category = final_analysis.get('issues_by_category', {})
+        else:
+            final_score = initial_score
+            final_issues_by_category = analysis_results.get('issues_by_category', {})
 
         return self._create_analysis_results(
-            initial_score=initial_analysis['quality_score'],
+            initial_score=initial_score,
             final_score=final_score,
-            total_issues=len(refined_issues),
-            issues_resolved=issues_resolved,
-            iterations=iterations,
-            final_code=best_code,
+            total_issues=len(final_issues),
+            issues_resolved=len(applied_issues),
+            iterations=analysis_results['iterations_run'],
+            final_code=refactored_code,
             summary={
-                'initial_analysis': initial_analysis,
-                'final_state': final_state,
-                'improvement': final_score - initial_analysis['quality_score']
-            }
+                'initial_analysis': analysis_results,
+                'applied_fixes': len(applied_issues),
+                'improvement': final_score - initial_score
+            },
+            issues_by_category=final_issues_by_category
         )
-
-    def _display_final_results(self, final_state: Dict, initial_analysis: Dict):
-        """Display comprehensive final results."""
-        print(f"\n🎯 Final Optimization Results:")
-        print("=" * 50)
-
-        initial_score = initial_analysis['quality_score']
-        final_score = final_state.get("best_score", initial_score)
-        improvement = final_score - initial_score
-
-        print(f"📈 Quality Improvement: {initial_score:.1f} → {final_score:.1f} ({improvement:+.1f})")
-        print(f"🔄 Iterations Completed: {len(final_state.get('history', []))}")
-        print(f"✅ Total Issues Resolved: {sum(step.get('issues_fixed', 0) for step in final_state.get('history', []))}")
-
-        # Show iteration history
-        print(f"\n📚 Iteration History:")
-        for step in final_state.get("history", []):
-            print(f"  Iteration {step.get('iteration', 0)}: Score {step.get('score', 0):.1f}, "
-                  f"Fixed {step.get('issues_fixed', 0)} issues")
-
-        print(f"\n✨ Final Code Quality: {final_score:.1f}/100")
 
     def _create_analysis_results(self, initial_score: float, final_score: float,
                                 total_issues: int, issues_resolved: int,
                                 iterations: int, final_code: str,
-                                summary: Dict) -> AnalysisResults:
+                                summary: Dict, issues_by_category: Dict) -> AnalysisResults:
         """Create structured analysis results."""
         return AnalysisResults(
             initial_score=initial_score,
@@ -348,14 +307,16 @@ class EnhancedControlAgent:
             issues_resolved=issues_resolved,
             iterations_performed=iterations,
             final_code=final_code,
-            analysis_summary=summary
+            analysis_summary=summary,
+            issues_by_category=issues_by_category
         )
 
 
-# Backward compatibility function
-def run_control_agent(code: str, language: str, project_dir: str = ".", mode: str = "full_scan") -> Optional[str]:
+# Backward compatibility function with iterative analysis
+def run_control_agent(code: str, language: str, project_dir: str = ".",
+                     mode: str = "full_scan") -> Optional[str]:
     """
-    Backward compatible function for running control agent.
+    Enhanced control agent with iterative analysis.
 
     Args:
         code: Source code to analyze
@@ -370,7 +331,13 @@ def run_control_agent(code: str, language: str, project_dir: str = ".", mode: st
         config = AnalysisConfig(interactive_mode=True)
         agent = EnhancedControlAgent(config, mode=mode)
         results = agent.analyze_code_comprehensive(code, language, project_dir)
-        print(f"\n📊 Session Summary:")
+
+        print(f"\n📊 Final Session Summary:")
+        print(f"  Initial Score: {results.initial_score:.1f}")
+        print(f"  Final Score: {results.final_score:.1f}")
+        print(f"  Improvement: {results.final_score - results.initial_score:+.1f}")
+        print(f"  Issues Resolved: {results.issues_resolved}/{results.total_issues_found}")
+
         show_session_summary()
         return results.final_code
     except Exception as e:
