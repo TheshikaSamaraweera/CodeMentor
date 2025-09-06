@@ -10,7 +10,7 @@ from agents.refactor_agent import run_refactor_agent
 from utils.context_analyzer import analyze_project_context
 from dotenv import load_dotenv
 from utils.language_detector import detect_language
-from cli.apply_fixes import apply_fixes
+from cli.enhanced_apply_fixes import apply_fixes_enhanced, EnhancedFixApplicator
 
 
 def format_comprehensive_analysis_report(results: dict, code_path: str) -> str:
@@ -155,13 +155,19 @@ def main():
         return
 
     # Add CLI argument parsing
-    parser = argparse.ArgumentParser(description="AI Code Reviewer with Comprehensive Analysis")
+    parser = argparse.ArgumentParser(description="AI Code Reviewer with Enhanced Fix System")
     parser.add_argument("code_path", help="Path to the code file")
     parser.add_argument(
         "--mode",
         choices=["quality", "security", "code_smell", "full_scan"],
         default="full_scan",
         help="Analysis mode: quality, security, code_smell, or full_scan"
+    )
+    parser.add_argument(
+        "--fix-mode",
+        choices=["interactive", "automatic", "legacy"],
+        default="interactive",
+        help="Fix application mode: interactive (step-by-step), automatic (optimized), or legacy"
     )
     args = parser.parse_args()
 
@@ -190,60 +196,88 @@ def main():
     report = format_comprehensive_analysis_report(results, code_path)
     print(report)
 
-    # Ask user if they want to apply fixes
+    # Enhanced fix application logic
     if results['total_unique_issues'] > 0:
-        answer = input("\n🤖 Apply fixes and optimize code? (y/N): ").strip().lower()
-        if answer == "y":
-            final_issues = results.get('final_issues', [])
+        final_issues = results.get('final_issues', [])
 
-            print(f"\n🔧 Applying User-Selected Fixes...")
-            feedback = apply_fixes(code, code, final_issues, api_key)
+        if args.fix_mode == "legacy":
+            # Use legacy apply_fixes for backward compatibility
+            from cli.apply_fixes import apply_fixes
+            answer = input("\n🤖 Apply fixes using legacy method? (y/N): ").strip().lower()
+            if answer == "y":
+                feedback = apply_fixes(code, code, final_issues, api_key)
+                applied_issues = [f["issue"] for f in feedback if f["applied"]]
 
-            # Apply refactoring for accepted fixes
-            refactored_code = code
-            applied_issues = [f["issue"] for f in feedback if f["applied"]]
+                if applied_issues:
+                    refactored_code = run_refactor_agent(code, applied_issues, api_key) or code
+                    if refactored_code != code:
+                        print(f"\n📝 Final Refactored Code:")
+                        print(refactored_code)
 
-            if applied_issues:
-                print(f"\n🛠️ Refactoring code with {len(applied_issues)} applied fixes...")
-                refactored_code = run_refactor_agent(code, applied_issues, api_key) or code
+        else:
+            # Use enhanced fix application system
+            print(f"\n🚀 Enhanced Fix Application System Available")
+            print(f"   Mode: {args.fix_mode.title()}")
+            print(f"   Issues to process: {len(final_issues)}")
 
-                if refactored_code != code:
-                    print(f"\n📝 Final Refactored Code:")
-                    print(refactored_code)
+            answer = input("\n🤖 Start enhanced fix application? (y/N): ").strip().lower()
+            if answer == "y":
+                applicator = EnhancedFixApplicator(api_key)
 
-                    # Optionally re-analyze the refactored code
-                    reanalyze = input(f"\n🔍 Re-analyze the refactored code? (y/N): ").strip().lower()
-                    if reanalyze == "y":
-                        print(f"\n🔄 Re-analyzing refactored code...")
+                if args.fix_mode == "interactive":
+                    final_code, feedback = applicator._run_interactive_mode(
+                        code, final_issues, context, args.mode
+                    )
+                elif args.fix_mode == "automatic":
+                    final_code, feedback = applicator._run_automatic_mode(
+                        code, final_issues, context, args.mode
+                    )
+
+                # Show final results
+                if final_code != code:
+                    print(f"\n📊 Final Results Summary:")
+
+                    # Re-analyze final code to show improvement
+                    try:
                         final_results = run_comprehensive_analysis(
-                            code=refactored_code,
+                            code=final_code,
                             api_key=api_key,
                             mode=args.mode,
                             context=context
                         )
 
-                        print(f"\n📊 Re-analysis Results:")
-                        print(f"   Original Score: {results['overall_score']:.1f}")
-                        print(f"   New Score: {final_results['overall_score']:.1f}")
-                        print(f"   Improvement: {final_results['overall_score'] - results['overall_score']:+.1f}")
-                        print(
-                            f"   Issues Reduced: {results['total_unique_issues']} → {final_results['total_unique_issues']}")
+                        improvement = final_results['overall_score'] - results['overall_score']
+                        issue_reduction = results['total_unique_issues'] - final_results['total_unique_issues']
 
-                        # Show category improvements
-                        if final_results.get('issues_by_category'):
-                            print(f"\n📂 Category Improvements:")
-                            for category in ['quality', 'security', 'code_smell', 'static']:
-                                orig_count = len(results.get('issues_by_category', {}).get(category, []))
-                                new_count = len(final_results.get('issues_by_category', {}).get(category, []))
-                                if orig_count > 0 or new_count > 0:
-                                    improvement = orig_count - new_count
-                                    print(f"   {category.title()}: {orig_count} → {new_count} ({improvement:+d})")
+                        print(f"   📈 Score Improvement: {results['overall_score']:.1f} → {final_results['overall_score']:.1f} ({improvement:+.1f})")
+                        print(f"   📋 Issue Reduction: {results['total_unique_issues']} → {final_results['total_unique_issues']} ({issue_reduction:+d})")
+
+                        # Category improvements
+                        print(f"\n📂 Category Improvements:")
+                        for category in ['quality', 'security', 'code_smell', 'static']:
+                            orig_count = len(results.get('issues_by_category', {}).get(category, []))
+                            new_count = len(final_results.get('issues_by_category', {}).get(category, []))
+                            if orig_count > 0 or new_count > 0:
+                                improvement = orig_count - new_count
+                                print(f"   {category.title()}: {orig_count} → {new_count} ({improvement:+d})")
+
+                        # Offer to save improved code
+                        save_code = input(f"\n💾 Save improved code to file? (y/N): ").strip().lower()
+                        if save_code == "y":
+                            output_path = f"{code_path}.improved"
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                f.write(final_code)
+                            print(f"✅ Improved code saved to: {output_path}")
+
+                    except Exception as e:
+                        print(f"⚠️ Final re-analysis failed: {e}")
+                        print("💾 Final code available, but improvement metrics unavailable")
+
                 else:
-                    print("⚠️ No changes were made during refactoring.")
+                    print("ℹ️ No changes were made to the code")
             else:
-                print("ℹ️ No fixes were applied.")
-        else:
-            print("\n🚫 Exiting after analysis. No changes applied.")
+                print("\n🚫 Fix application skipped")
+
     else:
         print("\n✅ No issues found! Your code is in excellent condition.")
 
