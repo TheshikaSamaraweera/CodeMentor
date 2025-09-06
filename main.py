@@ -1,4 +1,4 @@
-# main.py
+# main.py - Updated with Smart Fix Application System
 import os
 import json
 import argparse
@@ -10,7 +10,7 @@ from agents.refactor_agent import run_refactor_agent
 from utils.context_analyzer import analyze_project_context
 from dotenv import load_dotenv
 from utils.language_detector import detect_language
-from cli.enhanced_apply_fixes import apply_fixes_enhanced, EnhancedFixApplicator
+from cli.enhanced_apply_fixes  import SmartFixApplicator, StoppingCriteria
 
 
 def format_comprehensive_analysis_report(results: dict, code_path: str) -> str:
@@ -141,10 +141,62 @@ def format_comprehensive_analysis_report(results: dict, code_path: str) -> str:
             static_count = len(results['issues_by_category']['static'])
             report += f"• 🔧 STATIC: Fix {static_count} static analysis issues for better code quality.\n"
 
-        report += "• 🔄 Consider applying fixes category by category for systematic improvement.\n"
+        report += "• 🔄 Consider using smart fix application for systematic improvement.\n"
 
     report += f"\n{'=' * 80}\n"
     return report
+
+
+def create_smart_stopping_criteria(issues: list[dict], results: dict) -> StoppingCriteria:
+    """Create smart stopping criteria based on issue analysis."""
+
+    # Analyze issue composition
+    high_severity_count = sum(1 for issue in issues if issue.get('severity') == 'high')
+    security_count = sum(1 for issue in issues
+                         if 'security' in issue.get('description', '').lower())
+    structural_count = sum(1 for issue in issues
+                           if any(kw in issue.get('description', '').lower()
+                                  for kw in ['long method', 'complexity', 'nesting']))
+
+    current_score = results.get('overall_score', 0)
+
+    # Create adaptive criteria
+    if security_count > 0:
+        # Aggressive criteria for security issues
+        return StoppingCriteria(
+            score_threshold=90.0,
+            max_iterations=10,
+            plateau_iterations=2,
+            min_improvement_per_iteration=0.5,
+            acceptable_issue_categories={'style'}
+        )
+    elif high_severity_count > 3 or structural_count > 2:
+        # Moderate criteria for structural issues
+        return StoppingCriteria(
+            score_threshold=85.0,
+            max_iterations=8,
+            plateau_iterations=3,
+            min_improvement_per_iteration=1.0,
+            acceptable_issue_categories={'style', 'design'}
+        )
+    elif current_score < 70:
+        # More iterations needed for low quality code
+        return StoppingCriteria(
+            score_threshold=80.0,
+            max_iterations=10,
+            plateau_iterations=4,
+            min_improvement_per_iteration=2.0,
+            acceptable_issue_categories={'style'}
+        )
+    else:
+        # Standard criteria for good quality code
+        return StoppingCriteria(
+            score_threshold=85.0,
+            max_iterations=6,
+            plateau_iterations=3,
+            min_improvement_per_iteration=1.0,
+            acceptable_issue_categories={'style', 'design'}
+        )
 
 
 def main():
@@ -154,8 +206,8 @@ def main():
         print("❌ GEMINI_API_KEY environment variable not set.")
         return
 
-    # Add CLI argument parsing
-    parser = argparse.ArgumentParser(description="AI Code Reviewer with Enhanced Fix System")
+    # Enhanced CLI argument parsing
+    parser = argparse.ArgumentParser(description="AI Code Reviewer with Smart Fix System")
     parser.add_argument("code_path", help="Path to the code file")
     parser.add_argument(
         "--mode",
@@ -165,9 +217,21 @@ def main():
     )
     parser.add_argument(
         "--fix-mode",
-        choices=["interactive", "automatic", "legacy"],
-        default="interactive",
-        help="Fix application mode: interactive (step-by-step), automatic (optimized), or legacy"
+        choices=["smart", "automatic", "none"],
+        default="smart",
+        help="Fix application mode: smart (intelligent), automatic (iterative), or none"
+    )
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=None,
+        help="Custom quality score threshold (default: adaptive based on issues)"
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Maximum fix iterations (default: adaptive based on issues)"
     )
     args = parser.parse_args()
 
@@ -196,90 +260,152 @@ def main():
     report = format_comprehensive_analysis_report(results, code_path)
     print(report)
 
-    # Enhanced fix application logic
-    if results['total_unique_issues'] > 0:
+    # Smart fix application logic
+    if results['total_unique_issues'] > 0 and args.fix_mode != "none":
         final_issues = results.get('final_issues', [])
 
-        if args.fix_mode == "legacy":
-            # Use legacy apply_fixes for backward compatibility
-            from cli.apply_fixes import apply_fixes
-            answer = input("\n🤖 Apply fixes using legacy method? (y/N): ").strip().lower()
-            if answer == "y":
-                feedback = apply_fixes(code, code, final_issues, api_key)
-                applied_issues = [f["issue"] for f in feedback if f["applied"]]
+        print(f"\n🧠 Smart Fix Application Available")
+        print(f"   Mode: {args.fix_mode.title()}")
+        print(f"   Issues to process: {len(final_issues)}")
 
-                if applied_issues:
-                    refactored_code = run_refactor_agent(code, applied_issues, api_key) or code
-                    if refactored_code != code:
-                        print(f"\n📝 Final Refactored Code:")
-                        print(refactored_code)
-
+        # Create smart stopping criteria
+        if args.score_threshold or args.max_iterations:
+            # Use custom criteria
+            stopping_criteria = StoppingCriteria(
+                score_threshold=args.score_threshold or 85.0,
+                max_iterations=args.max_iterations or 8,
+                plateau_iterations=3,
+                min_improvement_per_iteration=1.0
+            )
         else:
-            # Use enhanced fix application system
-            print(f"\n🚀 Enhanced Fix Application System Available")
-            print(f"   Mode: {args.fix_mode.title()}")
-            print(f"   Issues to process: {len(final_issues)}")
+            # Use adaptive criteria
+            stopping_criteria = create_smart_stopping_criteria(final_issues, results)
 
-            answer = input("\n🤖 Start enhanced fix application? (y/N): ").strip().lower()
-            if answer == "y":
-                applicator = EnhancedFixApplicator(api_key)
+        print(f"\n⚙️  Smart Configuration:")
+        print(f"   🎯 Target Score: {stopping_criteria.score_threshold}")
+        print(f"   🔄 Max Iterations: {stopping_criteria.max_iterations}")
+        print(f"   📊 Plateau Tolerance: {stopping_criteria.plateau_iterations} iterations")
+        print(f"   ✅ Acceptable Categories: {', '.join(stopping_criteria.acceptable_issue_categories)}")
 
-                if args.fix_mode == "interactive":
-                    final_code, feedback = applicator._run_interactive_mode(
-                        code, final_issues, context, args.mode
+        answer = input(f"\n🤖 Start smart fix application? (y/N): ").strip().lower()
+        if answer == "y":
+            applicator = SmartFixApplicator(api_key, stopping_criteria)
+
+            if args.fix_mode == "smart":
+                final_code, feedback = applicator._run_smart_interactive_mode(
+                    code, final_issues, context, args.mode
+                )
+            elif args.fix_mode == "automatic":
+                final_code, feedback = applicator._run_automatic_mode(
+                    code, final_issues, context, args.mode
+                )
+
+            # Show final results with comprehensive analysis
+            if final_code != code:
+                print(f"\n📊 Final Smart Results:")
+
+                # Re-analyze final code to show improvement
+                try:
+                    final_results = run_comprehensive_analysis(
+                        code=final_code,
+                        api_key=api_key,
+                        mode=args.mode,
+                        context=context
                     )
-                elif args.fix_mode == "automatic":
-                    final_code, feedback = applicator._run_automatic_mode(
-                        code, final_issues, context, args.mode
-                    )
 
-                # Show final results
-                if final_code != code:
-                    print(f"\n📊 Final Results Summary:")
+                    improvement = final_results['overall_score'] - results['overall_score']
+                    issue_reduction = results['total_unique_issues'] - final_results['total_unique_issues']
 
-                    # Re-analyze final code to show improvement
-                    try:
-                        final_results = run_comprehensive_analysis(
-                            code=final_code,
-                            api_key=api_key,
-                            mode=args.mode,
-                            context=context
-                        )
+                    print(
+                        f"   📈 Score Improvement: {results['overall_score']:.1f} → {final_results['overall_score']:.1f} ({improvement:+.1f})")
+                    print(
+                        f"   📋 Issue Reduction: {results['total_unique_issues']} → {final_results['total_unique_issues']} ({issue_reduction:+d})")
 
-                        improvement = final_results['overall_score'] - results['overall_score']
-                        issue_reduction = results['total_unique_issues'] - final_results['total_unique_issues']
+                    # Smart interpretation of results
+                    if final_results['overall_score'] >= stopping_criteria.score_threshold:
+                        print(f"   🏆 SUCCESS: Target quality threshold achieved!")
+                    elif improvement > 10:
+                        print(f"   📈 EXCELLENT: Major improvement achieved!")
+                    elif improvement > 5:
+                        print(f"   ✅ GOOD: Solid improvement made!")
+                    elif improvement > 0:
+                        print(f"   📊 PROGRESS: Some improvement made!")
+                    else:
+                        print(f"   ⚠️  STABLE: Code quality maintained!")
 
-                        print(f"   📈 Score Improvement: {results['overall_score']:.1f} → {final_results['overall_score']:.1f} ({improvement:+.1f})")
-                        print(f"   📋 Issue Reduction: {results['total_unique_issues']} → {final_results['total_unique_issues']} ({issue_reduction:+d})")
+                    # Category improvements
+                    print(f"\n📂 Smart Category Analysis:")
+                    for category in ['quality', 'security', 'code_smell', 'static']:
+                        orig_count = len(results.get('issues_by_category', {}).get(category, []))
+                        new_count = len(final_results.get('issues_by_category', {}).get(category, []))
+                        if orig_count > 0 or new_count > 0:
+                            improvement = orig_count - new_count
+                            status = "✅" if improvement > 0 else "➖" if improvement == 0 else "⚠️"
+                            print(f"   {status} {category.title()}: {orig_count} → {new_count} ({improvement:+d})")
 
-                        # Category improvements
-                        print(f"\n📂 Category Improvements:")
-                        for category in ['quality', 'security', 'code_smell', 'static']:
-                            orig_count = len(results.get('issues_by_category', {}).get(category, []))
-                            new_count = len(final_results.get('issues_by_category', {}).get(category, []))
-                            if orig_count > 0 or new_count > 0:
-                                improvement = orig_count - new_count
-                                print(f"   {category.title()}: {orig_count} → {new_count} ({improvement:+d})")
+                    # Remaining issue analysis
+                    remaining_issues = final_results.get('final_issues', [])
+                    if remaining_issues:
+                        print(f"\n🔍 Remaining Issues Analysis:")
 
-                        # Offer to save improved code
-                        save_code = input(f"\n💾 Save improved code to file? (y/N): ").strip().lower()
-                        if save_code == "y":
-                            output_path = f"{code_path}.improved"
-                            with open(output_path, 'w', encoding='utf-8') as f:
-                                f.write(final_code)
-                            print(f"✅ Improved code saved to: {output_path}")
+                        # Categorize remaining issues
+                        remaining_categories = {}
+                        for issue in remaining_issues:
+                            desc = issue.get('description', '').lower()
+                            if any(kw in desc for kw in ['security', 'vulnerability']):
+                                remaining_categories['Security'] = remaining_categories.get('Security', 0) + 1
+                            elif any(kw in desc for kw in ['long method', 'complexity']):
+                                remaining_categories['Structural'] = remaining_categories.get('Structural', 0) + 1
+                            elif any(kw in desc for kw in ['parameter', 'responsibility']):
+                                remaining_categories['Design'] = remaining_categories.get('Design', 0) + 1
+                            else:
+                                remaining_categories['Style/Other'] = remaining_categories.get('Style/Other', 0) + 1
 
-                    except Exception as e:
-                        print(f"⚠️ Final re-analysis failed: {e}")
-                        print("💾 Final code available, but improvement metrics unavailable")
+                        for category, count in remaining_categories.items():
+                            priority = "🔴" if category == "Security" else "🟡" if category == "Structural" else "🟢"
+                            print(f"   {priority} {category}: {count} issues")
 
-                else:
-                    print("ℹ️ No changes were made to the code")
+                        # Smart recommendations for remaining issues
+                        if remaining_categories.get('Security', 0) > 0:
+                            print(f"   💡 RECOMMEND: Address remaining security issues manually")
+                        elif remaining_categories.get('Structural', 0) > 2:
+                            print(f"   💡 RECOMMEND: Consider additional refactoring for structural issues")
+                        elif final_results['overall_score'] >= 85:
+                            print(f"   💡 RECOMMEND: Remaining issues are acceptable for production")
+                        else:
+                            print(f"   💡 RECOMMEND: Consider manual review of remaining issues")
+                    else:
+                        print(f"   🎉 PERFECT: No issues remaining!")
+
+                    # Offer to save improved code
+                    save_code = input(f"\n💾 Save improved code to file? (y/N): ").strip().lower()
+                    if save_code == "y":
+                        output_path = f"{code_path}.improved"
+                        with open(output_path, 'w', encoding='utf-8') as f:
+                            f.write(final_code)
+                        print(f"✅ Improved code saved to: {output_path}")
+
+                        # Also save analysis report
+                        report_path = f"{code_path}.analysis_report.txt"
+                        with open(report_path, 'w', encoding='utf-8') as f:
+                            f.write("ORIGINAL ANALYSIS:\n")
+                            f.write(format_comprehensive_analysis_report(results, code_path))
+                            f.write("\n\nFINAL ANALYSIS:\n")
+                            f.write(format_comprehensive_analysis_report(final_results, code_path + ".improved"))
+                        print(f"📊 Analysis reports saved to: {report_path}")
+
+                except Exception as e:
+                    print(f"⚠️ Final re-analysis failed: {e}")
+                    print("💾 Final code available, but improvement metrics unavailable")
+
             else:
-                print("\n🚫 Fix application skipped")
+                print("ℹ️ No changes were made to the code")
+        else:
+            print("\n🚫 Smart fix application skipped")
 
-    else:
+    elif args.fix_mode != "none":
         print("\n✅ No issues found! Your code is in excellent condition.")
+        print("💡 Consider running with --mode=full_scan for comprehensive analysis")
 
     # Show session summary
     print(f"\n📚 Session Summary:")

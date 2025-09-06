@@ -1,0 +1,113 @@
+# config/smart_fix_config.yaml
+# Smart Fix Application Configuration
+
+# Default stopping criteria
+stopping_criteria:
+  default:
+    score_threshold: 85.0
+    max_iterations: 8
+    plateau_iterations: 3
+    min_improvement_per_iteration: 1.0
+    max_low_severity_issues: 3
+    acceptable_issue_categories: ["style", "design"]
+
+  # Adaptive criteria based on issue composition
+  security_focused:
+    score_threshold: 90.0
+    max_iterations: 10
+    plateau_iterations: 2
+    min_improvement_per_iteration: 0.5
+    max_low_severity_issues: 1
+    acceptable_issue_categories: ["style"]
+
+  structural_focused:
+    score_threshold: 85.0
+    max_iterations: 8
+    plateau_iterations: 3
+    min_improvement_per_iteration: 1.0
+    max_low_severity_issues: 2
+    acceptable_issue_categories: ["style", "design"]
+
+  quality_focused:
+    score_threshold: 80.0
+    max_iterations: 10
+    plateau_iterations: 4
+    min_improvement_per_iteration: 2.0
+    max_low_severity_issues: 5
+    acceptable_issue_categories: ["style"]
+
+# Issue categorization keywords
+issue_classification:
+  structural:
+    keywords: ["long method", "long function", "long class", "complexity", "cyclomatic", "nesting", "too many", "large class"]
+    priority: "high"
+
+  design:
+    keywords: ["single responsibility", "parameter", "cohesion", "coupling", "multiple operations", "violates", "separate functions", "passed together", "data class", "feature envy"]
+    priority: "medium"
+
+  style:
+    keywords: ["naming", "comment", "formatting", "convention", "style", "redundant", "magic number", "variable name"]
+    priority: "low"
+
+  security:
+    keywords: ["security", "vulnerability", "injection", "hardcode", "password", "token", "unsafe"]
+    priority: "critical"
+
+  performance:
+    keywords: ["performance", "inefficient", "slow", "optimization", "memory", "loop", "algorithm"]
+    priority: "medium"
+
+# Smart recommendations
+recommendations:
+  # When to recommend stopping
+  stop_conditions:
+    - condition: "only_acceptable_categories"
+      message: "Only style and design issues remain - consider stopping"
+    - condition: "score_above_threshold"
+      message: "Quality threshold achieved - further improvements may have diminishing returns"
+    - condition: "plateau_detected"
+      message: "Score has plateaued - may have reached optimal point for automated fixes"
+
+  # Issue selection recommendations
+  selection_priority:
+    - category: "security"
+      message: "Security issues should be fixed immediately"
+      auto_select: true
+    - category: "structural"
+      message: "Structural issues provide the most improvement"
+      auto_select: true
+    - category: "design"
+      message: "Design issues improve maintainability"
+      auto_select: false
+    - category: "style"
+      message: "Style issues are lowest priority"
+      auto_select: false
+
+# Analysis modes configuration
+analysis_modes:
+  full_scan:
+    description: "Complete analysis including all issue types"
+    analyses: ["quality", "security", "code_smell", "static"]
+
+  security:
+    description: "Focus on security vulnerabilities"
+    analyses: ["security", "static"]
+    filter_categories: ["security"]
+
+  code_smell:
+    description: "Focus on code smells and maintainability"
+    analyses: ["code_smell", "static"]
+    filter_categories: ["code_smell"]
+
+  quality:
+    description: "Focus on code quality and correctness"
+    analyses: ["quality", "static"]
+    filter_categories: ["quality"]
+
+# UI messages and prompts
+messages:
+  convergence_detected: "🎯 Smart analysis suggests stopping: {reason}"
+  progress_summary: "📊 Progress: {fixes_applied} fixes applied, {remaining_issues} issues remaining, score: {score:.1f}"
+  smart_recommendation: "🤖 Smart recommendation: Focus on {category} issues for maximum impact"
+  final_success: "🏆 Success! Target quality achieved with score: {score:.1f}"
