@@ -46,7 +46,7 @@ def fix(body: dict = Body(...)):
 
     try:
         final_code, feedback = apply_fixes_smart(
-            original_code=code,  # Renamed from code to original_code
+            original_code=code,
             issues=issues,
             api_key=api_key,
             context=context,
