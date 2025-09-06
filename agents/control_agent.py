@@ -157,8 +157,11 @@ class EnhancedControlAgent:
         if self.mode in ["code_smell", "full_scan"]:
             print("  👃 Running Code Smell Analysis...")
             smell_results = run_code_smell_agent(code, api_key=api_key)
+            if self.mode == "code_smell":
+                quality_score = smell_results.get("score", 0)  # Use smell score for code_smell mode
+                print(f"✅ Code Smell Agent completed - Score: {quality_score}/100")
 
-        if self.mode in ["full_scan"]:
+        if self.mode == "full_scan":
             print("  🔧 Running Static Analysis...")
             with tempfile.NamedTemporaryFile(suffix=f".{language.lower()}", delete=False, mode="w") as temp_file:
                 temp_file.write(code)
@@ -248,20 +251,19 @@ class EnhancedControlAgent:
         return user_input == "y"
 
     def _run_iterative_refinement(self, code: str, initial_analysis: Dict, context: Dict,
-                                  api_key: str) -> AnalysisResults:
+                                 api_key: str) -> AnalysisResults:
         """Run iterative code refinement process."""
         refined_issues = initial_analysis['refined_issues']
 
-        # Initial refactoring
-        print("  🔧 Applying Initial Fixes...")
-        refactored_code = run_refactor_agent(code, refined_issues, api_key)
+        # Initial fix application with user selection
+        print("  🔧 Applying User-Selected Fixes...")
+        feedback = apply_fixes(code, code, refined_issues, api_key)
 
-        if not refactored_code:
-            print("⚠️ Initial refactoring failed, using original code")
-            refactored_code = code
-
-        # Apply fixes interactively
-        feedback = apply_fixes(code, refactored_code, refined_issues)
+        # Use the refactored code from apply_fixes if any fixes were applied
+        refactored_code = code
+        applied_issues = [f["issue"] for f in feedback if f["applied"]]
+        if applied_issues:
+            refactored_code = run_refactor_agent(code, applied_issues, api_key) or code
 
         # Setup iterative refinement using existing recursive controller
         print("\n♻️ Starting Iterative Optimization...")
@@ -277,8 +279,8 @@ class EnhancedControlAgent:
             "best_code": code,
             "best_score": initial_analysis['quality_score'],
             "best_issues": refined_issues,
-            "issue_count": len(refined_issues),
-            "issues_fixed": 0,
+            "issue_count": len(refined_issues) - len(applied_issues),
+            "issues_fixed": len(applied_issues),
             "feedback": feedback,
             "min_score_threshold": self.config.min_quality_threshold,
             "max_high_severity_issues": 0,
@@ -294,7 +296,7 @@ class EnhancedControlAgent:
         best_code = final_state.get("best_code", code)
         final_score = final_state.get("best_score", initial_analysis['quality_score'])
         iterations = len(final_state.get("history", []))
-        issues_resolved = sum(step.get('issues_fixed', 0) for step in final_state.get("history", []))
+        issues_resolved = sum(step.get('issues_fixed', 0) for step in final_state.get("history", [])) + len(applied_issues)
 
         # Display final results
         self._display_final_results(final_state, initial_analysis)
@@ -335,9 +337,9 @@ class EnhancedControlAgent:
         print(f"\n✨ Final Code Quality: {final_score:.1f}/100")
 
     def _create_analysis_results(self, initial_score: float, final_score: float,
-                                 total_issues: int, issues_resolved: int,
-                                 iterations: int, final_code: str,
-                                 summary: Dict) -> AnalysisResults:
+                                total_issues: int, issues_resolved: int,
+                                iterations: int, final_code: str,
+                                summary: Dict) -> AnalysisResults:
         """Create structured analysis results."""
         return AnalysisResults(
             initial_score=initial_score,
