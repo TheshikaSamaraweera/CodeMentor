@@ -9,6 +9,8 @@ import os
 from typing import Dict, List, Any, Optional
 from cli.smart_apply_fixes import SmartFixApplicator, StoppingCriteria
 
+from cli.enhanced_apply_fixes import apply_fixes_smart
+
 
 def load_smart_config(config_path: str = "config/smart_fix_config.yaml") -> Dict:
     """Load smart configuration from YAML file."""
