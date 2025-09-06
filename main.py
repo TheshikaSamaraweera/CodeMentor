@@ -2,7 +2,7 @@
 import os
 import tempfile
 import json
-import argparse  # New import
+import argparse
 from utils.file_loader import load_file
 from agents.quality_agent import run_quality_agent
 from agents.static_analysis_agent import run_static_analysis
@@ -11,18 +11,20 @@ from agents.security_agent import run_security_agent
 from controls.recursive_controller import build_langgraph_loop
 from utils.context_analyzer import analyze_project_context
 from dotenv import load_dotenv
+from agents.code_smell_agent import run_code_smell_agent  # Added import
+from utils.language_detector import detect_language
 
 
 def format_initial_analysis_report(quality_results, security_results, static_results, merged_issues, code_path):
-    score = quality_results.get("score", 0)
-    quality_issues = quality_results.get("issues", [])
-    security_issues = security_results.get("issues", [])
-    static_issues = static_results
+    score = quality_results.get("score", 0) if quality_results else 0
+    quality_issues = quality_results.get("issues", []) if quality_results else []
+    security_issues = security_results.get("issues", []) if security_results else []
+    static_issues = static_results if static_results else []
 
     total_issues = len(merged_issues)
-    ai_only_issues = len([i for i in merged_issues if i.get("source") == "AI"])
-    static_only_issues = len([i for i in merged_issues if i.get("source") == "Static"])
-    both_issues = len([i for i in merged_issues if i.get("source") == "Both"])
+    ai_only_issues = len([i for i in merged_issues if i.get("source", "").lower() == "ai"])
+    static_only_issues = len([i for i in merged_issues if i.get("source", "").lower() == "static"])
+    both_issues = len([i for i in merged_issues if i.get("source", "").lower() == "both"])
 
     high_severity = [i for i in merged_issues if i.get("severity") == "high"]
     medium_severity = [i for i in merged_issues if i.get("severity") == "medium"]
@@ -59,12 +61,23 @@ def format_initial_analysis_report(quality_results, security_results, static_res
         report += "✅ No issues detected! Your code appears to be clean.\n"
     else:
         sources = {"AI": [], "Static": [], "Both": []}
+        # Normalize source explicitly to match dictionary keys
+        source_map = {
+            "ai": "AI",
+            "Ai": "AI",
+            "AI": "AI",
+            "static": "Static",
+            "Static": "Static",
+            "both": "Both",
+            "Both": "Both"
+        }
         for issue in merged_issues:
             issue.setdefault("explanation", "No specific explanation provided.")
             issue.setdefault("severity", "medium")
             issue.setdefault("confidence", 0.8)
             issue.setdefault("priority", 0.8 if issue["severity"] == "high" else 0.6)
-            source = issue.get("source", "AI")
+            raw_source = issue.get("source", "AI")
+            source = source_map.get(raw_source.lower(), "AI")  # Default to 'AI' if unknown
             sources[source].append(issue)
 
         for source, issues in sources.items():
@@ -116,7 +129,6 @@ def format_initial_analysis_report(quality_results, security_results, static_res
     return report
 
 def format_iteration_summary(final):
-    # Unchanged, keeping original function
     report = f"""
 {'=' * 80}
 🎯 ITERATIVE OPTIMIZATION COMPLETE
@@ -163,6 +175,12 @@ def main():
     parser.add_argument("code_path", help="Path to the code file")
     parser.add_argument("--max-iterations", type=int, default=5, help="Maximum number of iterations")
     parser.add_argument("--force-stop", action="store_true", help="Force stop after one iteration")
+    parser.add_argument(
+        "--mode",
+        choices=["quality", "security", "code_smell", "full_scan"],
+        default="full_scan",
+        help="Analysis mode: quality, security, code_smell, or full_scan"
+    )
     args = parser.parse_args()
 
     code_path = args.code_path.strip()
@@ -173,21 +191,36 @@ def main():
     code = load_file(code_path)
     project_dir = os.path.dirname(code_path) or "."
     context = analyze_project_context(project_dir)
+    language = detect_language(code_path)
 
-    print("\n🔍 Phase 1: Running Initial Analysis...")
-    quality_results = run_quality_agent(code, api_key, context)
-    quality_results = run_quality_agent(code, api_key, context)
-    score = quality_results.get("score", 0)
+    print(f"\n🔍 Phase 1: Running {args.mode.replace('_', ' ').title()} Analysis...")
+    quality_results = security_results = static_results = smell_results = None
 
-    security_results = run_security_agent(code, api_key, context)
+    if args.mode in ["quality", "full_scan"]:
+        quality_results = run_quality_agent(code, api_key, context)
+    if args.mode in ["security", "full_scan"]:
+        security_results = run_security_agent(code, api_key, context)
+    if args.mode in ["code_smell", "full_scan"]:
+        smell_results = run_code_smell_agent(code, api_key, language=language)
+    if args.mode == "full_scan":
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as temp_file:
+            temp_file.write(code)
+            temp_path = temp_file.name
+        static_results = run_static_analysis(temp_path)
+        os.remove(temp_path)
 
-    with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as temp_file:
-        temp_file.write(code)
-        temp_path = temp_file.name
-    static_results = run_static_analysis(temp_path)
-    os.remove(temp_path)
+    merged_issues = []
+    if args.mode == "quality":
+        merged_issues = quality_results.get("issues", []) if quality_results else []
+    elif args.mode == "security":
+        merged_issues = security_results.get("issues", []) if security_results else []
+    elif args.mode == "code_smell":
+        merged_issues = smell_results.get("issues", []) if smell_results else []
+    elif args.mode == "full_scan":
+        merged_issues = compare_issues(quality_results, security_results, static_results)
+        if smell_results:
+            merged_issues += smell_results.get("issues", [])
 
-    merged_issues = compare_issues(quality_results, security_results, static_results)
     report = format_initial_analysis_report(quality_results, security_results, static_results, merged_issues, code_path)
     print(report)
 
@@ -203,19 +236,19 @@ def main():
         "iteration": 0,
         "continue_": True,
         "best_code": code,
-        "best_score": score,
+        "best_score": quality_results.get("score", 0) if quality_results else 0,
         "best_issues": merged_issues,
         "issue_count": len(merged_issues),
         "issues_fixed": 0,
         "feedback": [],
         "min_score_threshold": 90.0,  # Match config.yaml default
         "max_high_severity_issues": 0,
-        "max_iterations": args.max_iterations,  # Use CLI arg
+        "max_iterations": args.max_iterations,
         "context": context,
         "optimization_applied": False,
         "previous_scores": [],
         "stagnation_count": 0,
-        "user_stop": args.force_stop  # New: User-defined stop
+        "user_stop": args.force_stop
     }
 
     graph = build_langgraph_loop()
