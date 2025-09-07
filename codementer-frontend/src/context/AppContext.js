@@ -17,28 +17,59 @@ export const AppProvider = ({ children }) => {
   const [initialScore, setInitialScore] = useState(null);
   const [initialIssuesCount, setInitialIssuesCount] = useState(0);
   const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [repoUrl, setRepoUrl] = useState('');
 
   const handleFileUpload = async (files) => {
     setLoading(true);
     setError(null);
     try {
+      const fileArray = Array.from(files || []);
+      if (!fileArray.length) {
+        throw new Error('No files selected');
+      }
       const formData = new FormData();
-      files.forEach(file => formData.append('files', file));
+      fileArray.forEach(file => formData.append('files', file));
       const response = await fetch('http://127.0.0.1:8000/upload-project', {
         method: 'POST',
         body: formData,
       });
       if (!response.ok) {
-        throw new Error('Upload failed');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Upload failed');
       }
       const data = await response.json();
-      setUploadedFiles(files.map(file => file.name));
-      if (files.length > 0) {
+      setUploadedFiles(fileArray.map(file => file.name));
+      if (fileArray.length > 0) {
         const reader = new FileReader();
         reader.onload = (e) => setCode(e.target.result);
-        reader.readAsText(files[0]);
+        reader.readAsText(fileArray[0]);
       }
       toast.success(`Uploaded ${data.file_count} files`);
+    } catch (err) {
+      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFetchRepo = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('http://127.0.0.1:8000/fetch-repo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_url: repoUrl }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Repo fetch failed');
+      }
+      const data = await response.json();
+      setUploadedFiles([repoUrl]);
+      setCode('');
+      toast.success(`Fetched ${data.file_count} files from repo`);
     } catch (err) {
       setError(err.message);
       toast.error(err.message);
@@ -64,7 +95,8 @@ export const AppProvider = ({ children }) => {
         body: JSON.stringify({ code, api_key: apiKey, mode }),
       });
       if (!response.ok) {
-        throw new Error('Analysis failed');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Analysis failed');
       }
       const data = await response.json();
       setResults(data);
@@ -82,17 +114,20 @@ export const AppProvider = ({ children }) => {
   const handleFix = async () => {
     setLoading(true);
     setError(null);
-    const issuesToFix = (results.final_issues || []).filter((issue) =>
-      Object.entries(results.issues_by_category || {}).some(([category, issues]) =>
-        issues.some(
-          (i) =>
-            `${category}-${i.line}-${i.description}` ===
-            `${category}-${issue.line}-${issue.description}` &&
-            selectedIssues.includes(`${category}-${i.line}-${i.description}`)
+    if (!results || !results.issues_by_category || !apiKey) {
+      setError('Missing analysis results or API key');
+      toast.error('Missing analysis results or API key');
+      setLoading(false);
+      return;
+    }
+    const allCode = results.context?.combined_code || code;
+    const issuesToFix = Object.entries(results.issues_by_category || {})
+      .flatMap(([category, issues]) =>
+        issues.filter((issue) =>
+          selectedIssues.includes(`${category}-${issue.line}-${issue.description}`)
         )
-      )
-    );
-    if (issuesToFix.length === 0) {
+      );
+    if (!issuesToFix.length) {
       setError('No issues selected for fixing');
       toast.error('No issues selected for fixing');
       setLoading(false);
@@ -103,24 +138,25 @@ export const AppProvider = ({ children }) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          code,
+          code: allCode,
           issues: issuesToFix,
           api_key: apiKey,
           mode,
-          context: {},
+          context: results.context || {},
         }),
       });
       if (!response.ok) {
-        throw new Error('Fix failed');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Fix failed');
       }
       const data = await response.json();
       setFinalCode(data.final_code);
-      setFeedback(data.feedback);
+      setFeedback(data.feedback); // Array of {file_path, feedback}
       await handleReAnalyze(data.final_code);
       toast.success('Issues fixed successfully!');
     } catch (err) {
       setError(err.message);
-      toast.error(err.message);
+      toast.error(`Fix failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -129,20 +165,31 @@ export const AppProvider = ({ children }) => {
   const handleGenerateBestCode = async () => {
     setLoading(true);
     setError(null);
+    if (!results || !results.issues_by_category || !apiKey) {
+      setError('Missing analysis results or API key');
+      toast.error('Missing analysis results or API key');
+      setLoading(false);
+      return;
+    }
+    const allCode = results.context?.combined_code || code;
+    const allIssues = Object.entries(results.issues_by_category || {}).flatMap(
+      ([_, issues]) => issues
+    );
     try {
       const response = await fetch('http://127.0.0.1:8000/fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          code,
-          issues: results.final_issues,
+          code: allCode,
+          issues: allIssues,
           api_key: apiKey,
           mode,
-          context: {},
+          context: results.context || {},
         }),
       });
       if (!response.ok) {
-        throw new Error('Generate best code failed');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Generate best code failed');
       }
       const data = await response.json();
       setFinalCode(data.final_code);
@@ -151,7 +198,7 @@ export const AppProvider = ({ children }) => {
       toast.success('Best code generated successfully!');
     } catch (err) {
       setError(err.message);
-      toast.error(err.message);
+      toast.error(`Generate best code failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -166,7 +213,8 @@ export const AppProvider = ({ children }) => {
         body: JSON.stringify({ code: newCode, api_key: apiKey, mode }),
       });
       if (!response.ok) {
-        throw new Error('Re-analysis failed');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Re-analysis failed');
       }
       const data = await response.json();
       setRemainingResults(data);
@@ -227,6 +275,9 @@ export const AppProvider = ({ children }) => {
         handleFileUpload,
         handleDownload,
         uploadedFiles,
+        repoUrl,
+        setRepoUrl,
+        handleFetchRepo,
       }}
     >
       {children}

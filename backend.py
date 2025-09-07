@@ -10,8 +10,10 @@ from utils.language_detector import detect_language
 from utils.context_analyzer import analyze_project_context
 import chromadb
 from chromadb.config import Settings
+import requests
 import ast
 import uuid
+import base64
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
@@ -122,21 +124,45 @@ def store_project(files_data: list):
         print("No valid embeddings to store")
 
 
-def analyze_with_retrieval(query: str, n_results: int = 5):
-    """Retrieve relevant snippets for analysis."""
+def fetch_github_repo(repo_url: str) -> list:
+    """Fetch public GitHub repo files using GitHub API."""
+    if not repo_url.startswith("https://github.com/"):
+        raise ValueError("Invalid GitHub repo URL")
+    parts = repo_url.replace("https://github.com/", "").split("/")
+    owner = parts[0]
+    repo = parts[1]
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
+    files_data = []
+
+    def recurse_contents(url):
+        response = requests.get(url)
+        response.raise_for_status()
+        contents = response.json()
+        for item in contents:
+            if item['type'] == 'file' and item['name'].endswith(('.py', '.js')):
+                file_response = requests.get(item['download_url'])
+                file_response.raise_for_status()
+                code = file_response.text
+                files_data.append({'file_path': item['path'], 'code': code})
+            elif item['type'] == 'dir':
+                recurse_contents(item['url'])
+
+    recurse_contents(api_url)
+    return files_data
+
+
+@app.post("/fetch-repo")
+async def fetch_repo(body: dict = Body(...)):
+    """Handle GitHub repo fetch and storage."""
+    repo_url = body.get('repo_url')
+    if not repo_url:
+        return JSONResponse(content={"error": "Missing repo_url"}, status_code=400)
     try:
-        query_embedding = get_embedding(query)
-        if not query_embedding:
-            print("Query failed: Empty query embedding")
-            return {'documents': [], 'metadatas': []}
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results
-        )
-        return results
+        files_data = fetch_github_repo(repo_url)
+        store_project(files_data)
+        return JSONResponse(content={"status": "repo fetched and stored", "file_count": len(files_data)})
     except Exception as e:
-        print(f"Retrieval error: {e}")
-        return {'documents': [], 'metadatas': []}
+        return JSONResponse(content={"error": f"Repo fetch failed: {str(e)}"}, status_code=400)
 
 
 @app.post("/upload-project")
@@ -173,20 +199,26 @@ async def analyze(body: dict = Body(...)):
     query = f"analyze {mode} in code"
     retrieval = analyze_with_retrieval(query)
 
-    retrieved_code = '\n\n'.join(retrieval['documents'][0]) if retrieval['documents'] else code
+    retrieved_snippets = retrieval['documents'][0] if retrieval['documents'] else [code]
     metadatas = retrieval['metadatas'][0] if retrieval['metadatas'] else []
-    full_context = {'retrieved_snippets': retrieved_code, 'language': 'Python', 'metadatas': metadatas}
+    full_context = {
+        'retrieved_snippets': retrieved_snippets,
+        'combined_code': '\n\n'.join(retrieved_snippets),
+        'language': 'Python',
+        'metadatas': metadatas
+    }
 
     project_dir = "."
     context = analyze_project_context(project_dir)
     context.update(full_context)
 
     try:
-        results = run_comprehensive_analysis(retrieved_code, api_key, mode, context)
+        results = run_comprehensive_analysis(full_context['combined_code'], api_key, mode, context)
         for category, issues in results.get('issues_by_category', {}).items():
             for issue in issues:
                 issue['file_path'] = next(
                     (m['file_path'] for m in metadatas if m['start_line'] <= issue['line'] <= m['end_line']), 'unknown')
+        results['context'] = full_context
         return JSONResponse(content=results)
     except Exception as e:
         return JSONResponse(content={"error": f"Analysis failed: {str(e)}"}, status_code=500)
@@ -194,23 +226,71 @@ async def analyze(body: dict = Body(...)):
 
 @app.post("/fix")
 async def fix(body: dict = Body(...)):
+    """Fix code issues for all files in context."""
     code = body.get('code')
     issues = body.get('issues', [])
     api_key = body.get('api_key')
-    mode = body.get('mode', 'full_scan')
     context = body.get('context', {})
+    mode = body.get('mode', 'full_scan')
     if not code or not issues or not api_key:
         return JSONResponse(content={"error": "Missing parameters"}, status_code=400)
 
     try:
-        final_code, feedback = apply_fixes_smart(
-            original_code=code,
-            issues=issues,
-            api_key=api_key,
-            context=context,
-            mode=mode,
-            fix_mode="automatic"
-        )
-        return JSONResponse(content={"final_code": final_code, "feedback": feedback})
+        # Group issues by file_path
+        file_issues = {}
+        for issue in issues:
+            file_path = issue.get('file_path', 'unknown')
+            if file_path not in file_issues:
+                file_issues[file_path] = []
+            file_issues[file_path].append(issue)
+
+        fixed_codes = {}
+        feedback = []
+        for file_path, file_issues in file_issues.items():
+            # Extract code for this file from context
+            file_code = ''
+            if context.get('metadatas') and context.get('retrieved_snippets'):
+                for meta, snippet in zip(context['metadatas'], context['retrieved_snippets']):
+                    if meta['file_path'] == file_path:
+                        file_code += snippet + '\n\n'
+            file_code = file_code.strip() or code
+
+            final_code, file_feedback = apply_fixes_smart(
+                original_code=file_code,
+                issues=file_issues,
+                api_key=api_key,
+                context=context,
+                mode=mode,
+                fix_mode="automatic"
+            )
+            # Ensure final_code is a string
+            if isinstance(final_code, list):
+                final_code = '\n\n'.join(str(item) for item in final_code)
+            # Ensure file_feedback is a string or list of strings
+            if isinstance(file_feedback, list):
+                file_feedback = '\n'.join(str(item) for item in file_feedback)
+            fixed_codes[file_path] = final_code
+            feedback.append({'file_path': file_path, 'feedback': file_feedback})
+
+        # Combine fixed codes
+        combined_code = '\n\n'.join(f"# {path}\n{code}" for path, code in fixed_codes.items())
+        return JSONResponse(content={"final_code": combined_code, "feedback": feedback})
     except Exception as e:
         return JSONResponse(content={"error": f"Fix failed: {str(e)}"}, status_code=500)
+
+
+def analyze_with_retrieval(query: str, n_results: int = 5):
+    """Retrieve relevant snippets for analysis."""
+    try:
+        query_embedding = get_embedding(query)
+        if not query_embedding:
+            print("Query failed: Empty query embedding")
+            return {'documents': [], 'metadatas': []}
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results
+        )
+        return results
+    except Exception as e:
+        print(f"Retrieval error: {e}")
+        return {'documents': [], 'metadatas': []}

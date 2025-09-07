@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
 const Home = () => {
-  const { apiKey, setApiKey, mode, setMode, handleAnalyze, results, error, loading, handleFileUpload, uploadedFiles } = useContext(AppContext);
+  const { apiKey, setApiKey, mode, setMode, handleAnalyze, results, error, loading, handleFileUpload, uploadedFiles, repoUrl, setRepoUrl, handleFetchRepo } = useContext(AppContext);
   const navigate = useNavigate();
 
   const onDrop = async (acceptedFiles) => {
@@ -41,6 +41,22 @@ const Home = () => {
               <input {...getInputProps()} />
               <Typography>{isDragActive ? 'Drop files here...' : 'Drag and drop files or zip (multiple supported)'}</Typography>
             </Box>
+            <TextField
+              label="GitHub Repo URL (Public)"
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              fullWidth
+              sx={{ mb: 2 }}
+            />
+            <Button
+              variant="outlined"
+              onClick={handleFetchRepo}
+              disabled={loading || !repoUrl}
+              fullWidth
+              sx={{ mb: 2 }}
+            >
+              {loading ? <CircularProgress size={24} color="inherit" /> : 'Fetch GitHub Repo'}
+            </Button>
             {uploadedFiles.length > 0 && (
               <Box sx={{ mb: 2 }}>
                 <Typography variant="h6">Uploaded Files:</Typography>
