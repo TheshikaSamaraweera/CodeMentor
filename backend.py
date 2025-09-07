@@ -10,9 +10,9 @@ from utils.language_detector import detect_language
 from utils.context_analyzer import analyze_project_context
 import chromadb
 from chromadb.config import Settings
-import requests
 import ast
 import uuid
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 app = FastAPI()
@@ -29,24 +29,23 @@ app.add_middleware(
 client = chromadb.Client(Settings(anonymized_telemetry=False, is_persistent=False))
 collection = client.get_or_create_collection(name="code_snippets")
 
-# Hugging Face API setup
-HF_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
-HF_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/paraphrase-MiniLM-L3-v2"
+# Load local SentenceTransformer model
+try:
+    model = SentenceTransformer('paraphrase-MiniLM-L3-v2')
+except Exception as e:
+    print(f"Failed to load SentenceTransformer model: {e}")
+    raise
 
 
 def get_embedding(text: str) -> list:
-    """Generate embedding using Hugging Face Inference API."""
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    payload = {"inputs": text}
+    """Generate embedding using local SentenceTransformer model."""
     try:
-        response = requests.post(HF_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        embedding = response.json()
-        if isinstance(embedding, list) and len(embedding) > 0:
+        embedding = model.encode([text], convert_to_numpy=True)[0].tolist()
+        if isinstance(embedding, list) and len(embedding) == 384:
             return embedding
-        raise ValueError("Invalid embedding response")
+        raise ValueError(f"Invalid embedding: {embedding}")
     except Exception as e:
-        print(f"Embedding error: {e}")
+        print(f"Embedding error: {str(e)} for text: {text[:50]}...")
         return []
 
 
@@ -73,7 +72,6 @@ def chunk_code(code: str, file_path: str, language: str) -> list:
                     })
         except SyntaxError:
             pass
-    # Fallback: line-based chunks
     lines = code.splitlines()
     for i in range(0, len(lines), 10):
         chunk = '\n'.join(lines[i:i + 10])
@@ -108,6 +106,8 @@ def store_project(files_data: list):
                 all_documents.append(chunk['snippet'])
                 all_metadatas.append(chunk['metadata'])
                 all_ids.append(chunk['metadata']['id'])
+            else:
+                print(f"Skipping chunk due to empty embedding: {chunk['snippet'][:50]}...")
     if all_embeddings:
         try:
             collection.add(
@@ -118,6 +118,8 @@ def store_project(files_data: list):
             )
         except Exception as e:
             print(f"Error storing in Chroma: {e}")
+    else:
+        print("No valid embeddings to store")
 
 
 def analyze_with_retrieval(query: str, n_results: int = 5):
@@ -125,6 +127,7 @@ def analyze_with_retrieval(query: str, n_results: int = 5):
     try:
         query_embedding = get_embedding(query)
         if not query_embedding:
+            print("Query failed: Empty query embedding")
             return {'documents': [], 'metadatas': []}
         results = collection.query(
             query_embeddings=[query_embedding],
@@ -157,6 +160,7 @@ async def upload_project(files: list[UploadFile] = File(...)):
     except Exception as e:
         return JSONResponse(content={"error": f"Upload failed: {str(e)}"}, status_code=500)
 
+
 @app.post("/analyze")
 async def analyze(body: dict = Body(...)):
     """Analyze code with retrieval from vector DB."""
@@ -165,8 +169,6 @@ async def analyze(body: dict = Body(...)):
     api_key = body.get('api_key')
     if not api_key:
         return JSONResponse(content={"error": "Missing api_key"}, status_code=400)
-    if not HF_API_TOKEN:
-        return JSONResponse(content={"error": "Missing Hugging Face API token"}, status_code=400)
 
     query = f"analyze {mode} in code"
     retrieval = analyze_with_retrieval(query)
@@ -199,8 +201,6 @@ async def fix(body: dict = Body(...)):
     context = body.get('context', {})
     if not code or not issues or not api_key:
         return JSONResponse(content={"error": "Missing parameters"}, status_code=400)
-    if not HF_API_TOKEN:
-        return JSONResponse(content={"error": "Missing Hugging Face API token"}, status_code=400)
 
     try:
         final_code, feedback = apply_fixes_smart(
