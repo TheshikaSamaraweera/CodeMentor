@@ -16,13 +16,34 @@ export const AppProvider = ({ children }) => {
   const [loading, setLoading] = useState(false);
   const [initialScore, setInitialScore] = useState(null);
   const [initialIssuesCount, setInitialIssuesCount] = useState(0);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => setCode(ev.target.result);
-      reader.readAsText(file);
+  const handleFileUpload = async (files) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      files.forEach(file => formData.append('files', file));
+      const response = await fetch('http://127.0.0.1:8000/upload-project', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+      const data = await response.json();
+      setUploadedFiles(files.map(file => file.name));
+      if (files.length > 0) {
+        const reader = new FileReader();
+        reader.onload = (e) => setCode(e.target.result);
+        reader.readAsText(files[0]);
+      }
+      toast.success(`Uploaded ${data.file_count} files`);
+    } catch (err) {
+      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -66,7 +87,7 @@ export const AppProvider = ({ children }) => {
         issues.some(
           (i) =>
             `${category}-${i.line}-${i.description}` ===
-            `${category}-${issue.line}-${i.description}` &&
+            `${category}-${issue.line}-${issue.description}` &&
             selectedIssues.includes(`${category}-${i.line}-${i.description}`)
         )
       )
@@ -205,6 +226,7 @@ export const AppProvider = ({ children }) => {
         initialIssuesCount,
         handleFileUpload,
         handleDownload,
+        uploadedFiles,
       }}
     >
       {children}

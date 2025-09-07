@@ -1,5 +1,7 @@
 import React, { useContext } from 'react';
-import { Box, Button, Typography, Card, CardContent, CircularProgress, TextField, Select, MenuItem } from '@mui/material';
+import { Box, Button, Typography, Card, CardContent, CircularProgress, TextField, Select, MenuItem, List, ListItem, ListItemText } from '@mui/material';
+import { useDropzone } from 'react-dropzone';
+import { toast } from 'react-toastify'; // Added import
 import CodeUploader from '../components/CodeUploader';
 import ScoreSummary from '../components/ScoreSummary';
 import { AppContext } from '../context/AppContext';
@@ -7,8 +9,22 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
 const Home = () => {
-  const { code, apiKey, setApiKey, mode, setMode, handleAnalyze, results, error, loading } = useContext(AppContext);
+  const { apiKey, setApiKey, mode, setMode, handleAnalyze, results, error, loading, handleFileUpload, uploadedFiles } = useContext(AppContext);
   const navigate = useNavigate();
+
+  const onDrop = async (acceptedFiles) => {
+    if (acceptedFiles?.length) {
+      await handleFileUpload(acceptedFiles);
+    } else {
+      toast.error('No valid files selected');
+    }
+  };
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    multiple: true,
+    accept: { 'text/*': ['.py', '.js', '.zip'] },
+  });
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
@@ -19,7 +35,26 @@ const Home = () => {
         <Card sx={{ mb: 3 }}>
           <CardContent>
             <Typography variant="h5" gutterBottom>
-              Upload and Analyze Code
+              Upload Project or Files
+            </Typography>
+            <Box {...getRootProps()} sx={{ border: '2px dashed #ccc', p: 3, textAlign: 'center', mb: 2, bgcolor: isDragActive ? 'action.hover' : 'background.paper' }}>
+              <input {...getInputProps()} />
+              <Typography>{isDragActive ? 'Drop files here...' : 'Drag and drop files or zip (multiple supported)'}</Typography>
+            </Box>
+            {uploadedFiles.length > 0 && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="h6">Uploaded Files:</Typography>
+                <List dense>
+                  {uploadedFiles.map((file, index) => (
+                    <ListItem key={index}>
+                      <ListItemText primary={file} />
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
+            <Typography variant="subtitle1" gutterBottom>
+              Preview First File:
             </Typography>
             <CodeUploader />
             <TextField
@@ -44,7 +79,7 @@ const Home = () => {
             <Button
               variant="contained"
               onClick={handleAnalyze}
-              disabled={loading || !code || !apiKey}
+              disabled={loading || !apiKey}
               fullWidth
               size="large"
               sx={{ mt: 2 }}

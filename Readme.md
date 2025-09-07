@@ -12,3 +12,9 @@ python main.py code.py --mode=full_scan --fix-mode=automatic
 
 # Custom thresholds
 python main.py code.py --score-threshold=90 --max-iterations=10
+
+
+Run the Application:
+
+Backend: uvicorn backend:app --reload
+Frontend: cd codementer-frontend && npm start
